@@ -1,0 +1,40 @@
+# Dependencies
+node_modules/
+
+# Build output (if a tsconfig or build step is added later)
+dist/
+build/
+out/
+
+# Compiled JavaScript from TypeScript
+*.js
+*.js.map
+*.d.ts
+*.d.ts.map
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# OS files
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+
+# IDE / editor
+.idea/
+.vscode/
+*.sublime-project
+*.sublime-workspace
+
+# npm
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# package-lock.json is committed by convention for npm projects,
+# but uncomment the line below if you prefer not to track it:
+# package-lock.json

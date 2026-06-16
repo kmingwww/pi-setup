@@ -1,0 +1,32 @@
+{
+  "name": "pi-ask",
+  "version": "0.1.0",
+  "description": "A pi package with an ask tool for user questions — single/multi-select with optional write-in",
+  "keywords": [
+    "pi-package",
+    "ask",
+    "question",
+    "prompt",
+    "user-input"
+  ],
+  "license": "MIT",
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
+    "typebox": "*"
+  },
+  "scripts": {
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "^0.79.4",
+    "@earendil-works/pi-tui": "^0.79.4",
+    "typebox": "^1.1.38",
+    "vitest": "^4.1.9"
+  },
+  "pi": {
+    "extensions": [
+      "./extensions"
+    ]
+  }
+}
