@@ -139,7 +139,7 @@ class PromptState {
   canSubmit(): boolean {
     const count = this.selectionCount();
     if (count < this.cfg.minSelections) return false;
-    if (this.cfg.maxSelections > 0 && count > this.cfg.maxSelections) return false;
+    if (this.cfg.maxSelections > 0 && this.selections.size > this.cfg.maxSelections) return false;
     return true;
   }
 
