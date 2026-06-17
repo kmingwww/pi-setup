@@ -4,6 +4,8 @@
  * Sends a notification when Pi agent finishes a turn and is waiting for input.
  * Useful when you switch away from the Pi terminal and want to know when it's done.
  *
+ * See docs/notify.md for documentation.
+ *
  * Probes the system at load time and only uses notification mechanisms that are
  * actually available. Supports:
  * - Desktop notifications via `notify-send` (Linux) or `osascript` (macOS)
@@ -46,10 +48,10 @@ const backends: NotificationBackends = {
 // ---------------------------------------------------------------------------
 
 /** Walk messages in reverse to find the last user prompt. */
-function extractPrompt(messages: Array<{ role: string; content: unknown }>): string | undefined {
+function extractPrompt(messages: any[]): string | undefined {
 	for (let i = messages.length - 1; i >= 0; i--) {
 		const msg = messages[i]!;
-		if (msg.role !== "user") continue;
+		if (msg.role !== "user" || !msg.content) continue;
 
 		const content = msg.content;
 		if (typeof content === "string") return content;
@@ -131,35 +133,7 @@ function notifyOSC99(title: string, body: string): void {
 // Extension entry point — probes system, then hooks agent_end
 // ---------------------------------------------------------------------------
 
-export default async function (pi: ExtensionAPI) {
-	// --- Probe binaries in parallel ---
-	const [hasNotifySend, hasPowershell, hasOsascript] = await Promise.all([
-		probeBin("notify-send"),
-		probeBin("powershell.exe"),
-		probeBin("osascript"),
-	]);
-
-	// --- Desktop backend (platform-specific) ---
-	if (hasOsascript) {
-		backends.macos = true;
-	} else if (hasNotifySend) {
-		backends.linux = true;
-	}
-
-	// --- Terminal backend (mutually exclusive, based on env vars) ---
-	if (process.env.WT_SESSION && hasPowershell) {
-		backends.windowsToast = true;
-	} else if (process.env.KITTY_WINDOW_ID) {
-		backends.osc99 = true;
-	} else {
-		// OSC 777 is the fallback for most modern terminals.
-		// It's an escape sequence written to stdout — if the terminal doesn't
-		// understand it, it's silently ignored. So we always enable it when no
-		// specific terminal env var is detected.
-		backends.osc777 = true;
-	}
-
-	// --- Hook agent_end (interactive/TUI only — skip subagents, RPC, print, etc.) ---
+export default function (pi: ExtensionAPI) {
 	let isFocused = true; // Assume focused until terminal tells us otherwise
 
 	function handleStdinData(data: Buffer) {
@@ -168,35 +142,43 @@ export default async function (pi: ExtensionAPI) {
 		if (str.includes("\x1b[O")) isFocused = false;
 	}
 
-	pi.on("agent_end", async (event: any, ctx) => {
-		if (ctx.mode !== "tui" || isFocused) return;
+	let probePromise: Promise<void> | null = null;
+	let probeComplete = false;
 
-		const title = "Pi";
-		const prompt = extractPrompt(event.messages);
-		const body = buildBody(prompt);
+	function ensureProbed(): Promise<void> {
+		if (probePromise) return probePromise;
+		probePromise = Promise.all([
+			probeBin("notify-send"),
+			probeBin("powershell.exe"),
+			probeBin("osascript"),
+		]).then(([hasNotifySend, hasPowershell, hasOsascript]) => {
+			if (hasOsascript) backends.macos = true;
+			else if (hasNotifySend) backends.linux = true;
 
-		if (backends.macos) notifyMacOS(title, body);
-		if (backends.linux) notifyLinux(title, body);
-		if (backends.windowsToast) notifyWindows(title, body);
-		if (backends.osc99) notifyOSC99(title, body);
-		if (backends.osc777) notifyOSC777(title, body);
-	});
+			if (process.env.WT_SESSION && hasPowershell) backends.windowsToast = true;
+			else if (process.env.KITTY_WINDOW_ID) backends.osc99 = true;
+			else backends.osc777 = true;
 
-	// Log what's active on startup so the user knows what to expect
-	const active: string[] = [];
-	if (backends.macos) active.push("desktop (macOS)");
-	if (backends.linux) active.push("desktop (Linux)");
-	if (backends.osc777) active.push("OSC 777");
-	if (backends.osc99) active.push("OSC 99 (Kitty)");
-	if (backends.windowsToast) active.push("Windows Toast");
+			probeComplete = true;
+		});
+		return probePromise;
+	}
 
-	// At least one backend is always active (OSC 777 is the default fallback).
 	pi.on("session_start", async (_event, ctx) => {
 		if (ctx.mode !== "tui") return;
+
+		await ensureProbed();
 
 		// Enable focus tracking and listen for events
 		process.stdout.write("\x1b[?1004h");
 		process.stdin.on("data", handleStdinData);
+
+		const active: string[] = [];
+		if (backends.macos) active.push("desktop (macOS)");
+		if (backends.linux) active.push("desktop (Linux)");
+		if (backends.osc777) active.push("OSC 777");
+		if (backends.osc99) active.push("OSC 99 (Kitty)");
+		if (backends.windowsToast) active.push("Windows Toast");
 
 		ctx.ui.notify(`Notify: ${active.join(", ")} (Background only)`, "info");
 	});
@@ -207,5 +189,19 @@ export default async function (pi: ExtensionAPI) {
 		// Disable focus tracking and clean up listener
 		process.stdout.write("\x1b[?1004l");
 		process.stdin.removeListener("data", handleStdinData);
+	});
+
+	pi.on("agent_end", async (event, ctx) => {
+		if (ctx.mode !== "tui" || isFocused || !probeComplete) return;
+
+		const title = "Pi";
+		const prompt = extractPrompt(event.messages);
+		const body = buildBody(prompt);
+
+		if (backends.macos) notifyMacOS(title, body);
+		if (backends.linux) notifyLinux(title, body);
+		if (backends.windowsToast) notifyWindows(title, body);
+		if (backends.osc99) notifyOSC99(title, body);
+		if (backends.osc777) notifyOSC777(title, body);
 	});
 }
