@@ -25,7 +25,8 @@ vi.mock("@earendil-works/pi-tui", async (importOriginal) => {
 			this._text = t;
 		}
 		handleInput(data: string) {
-			if (matchesKey(data, Key.enter) || data === "\r" || data === "\n") {
+			// Plain Enter → submit
+			if (matchesKey(data, Key.enter) || data === "\r") {
 				if (!this.disableSubmit && this.onSubmit) {
 					const value = this._text;
 					this._text = "";
@@ -62,7 +63,10 @@ interface Harness {
 	doneSpy: ReturnType<typeof vi.fn>;
 	pressUp: () => void;
 	pressDown: () => void;
+	pressKey: (data: string) => void;
 	pressEnter: () => void;
+	pressShiftEnter: () => void;
+	pressAltEnter: () => void;
 	pressSpace: () => void;
 	pressEsc: () => void;
 	type: (text: string) => void;
@@ -115,6 +119,10 @@ function createHarness(
 		doneSpy,
 		pressUp: () => handleInput!("\x1b[A"),
 		pressDown: () => handleInput!("\x1b[B"),
+		pressKey: (data: string) => handleInput!(data),
+		// Don't intercept Enter — it flows to the Editor which
+		// calls onSubmit → done(false) for plain Enter.
+		// Shift+Enter / Alt+Enter are intercepted above to insert \n.
 		pressEnter: () => handleInput!("\r"),
 		pressSpace: () => handleInput!(" "),
 		pressEsc: () => handleInput!("\x1b"),
@@ -258,12 +266,11 @@ describe("interactive — single-select", () => {
 		expect(r.content[0].text).toBe('The user wrote: "hello".');
 	});
 
-	it("Enter from empty write-in submits (always)", async () => {
+	it("Enter from empty write-in does nothing (needs selection or text)", async () => {
 		const h = createHarness("Q", [{ label: "Alpha" }]);
 		h.pressDown(); // write-in
-		h.pressEnter();
-		const r = await h.result;
-		expect(r.content[0].text).toMatch(/declined|no answer/);
+		h.pressEnter(); // empty, no selections → canSubmit false, done not called
+		expect(h.doneSpy).not.toHaveBeenCalled();
 	});
 
 	it("Esc cancels from options", async () => {

@@ -7,7 +7,7 @@
  * and always-visible write-in field below.
  *
  * Single-select:
- *   ↑↓ navigate, Enter on option = select + submit
+ *   ↑↓ navigate, Enter = select + submit
  *   Space holds option (to combine with write-in), ↓ to write-in
  *
  * Multi-select:
@@ -171,21 +171,20 @@ export default function askExtension(pi: ExtensionAPI) {
 						return true;
 					}
 
+					function isEnterKey(data: string) {
+						return matchesKey(data, Key.enter) || data === "\r";
+					}
+
 					// --- input ---
 					function handleInput(data: string) {
 						const maxOptIndex = params.options.length - 1;
 
+						// --- Write-in field focused ---
 						if (focusedField) {
 							if (matchesKey(data, Key.up)) {
 								focusedField = false;
 								currentOptionIndex = Math.max(0, maxOptIndex);
 								refresh();
-								return;
-							}
-							if (matchesKey(data, Key.enter) || data === "\r" || data === "\n" || data === "\r\n") {
-								const trimmed = editor.getText().trim();
-								if (trimmed) customAnswer = trimmed;
-								done(false);
 								return;
 							}
 							if (matchesKey(data, Key.escape)) {
@@ -205,9 +204,7 @@ export default function askExtension(pi: ExtensionAPI) {
 						}
 						if (matchesKey(data, Key.down)) {
 							if (currentOptionIndex >= maxOptIndex) {
-								// Move to text field
 								focusedField = true;
-								currentOptionIndex = -1;
 								refresh();
 								return;
 							}
@@ -215,11 +212,14 @@ export default function askExtension(pi: ExtensionAPI) {
 							refresh();
 							return;
 						}
+						if (matchesKey(data, Key.escape)) {
+							done(true);
+							return;
+						}
 
 						// --- Single-select mode ---
 						if (!allowMultiple) {
-							if ((matchesKey(data, Key.enter) || data === "\r" || data === "\n") && currentOptionIndex >= 0) {
-								// Select option and submit (includes any custom text)
+							if (isEnterKey(data)) {
 								selections.clear();
 								selections.add(currentOptionIndex);
 								const trimmed = editor.getText().trim();
@@ -227,17 +227,11 @@ export default function askExtension(pi: ExtensionAPI) {
 								done(false);
 								return;
 							}
-
-							// Space holds option without submitting (to combine with write-in)
 							if (matchesKey(data, "space")) {
 								selections.clear();
 								selections.add(currentOptionIndex);
 								refresh();
 								return;
-							}
-
-							if (matchesKey(data, Key.escape)) {
-								done(true);
 							}
 							return;
 						}
@@ -252,16 +246,11 @@ export default function askExtension(pi: ExtensionAPI) {
 							refresh();
 							return;
 						}
-
-						if (matchesKey(data, Key.enter) || data === "\r" || data === "\n") {
+						if (isEnterKey(data)) {
 							const trimmed = editor.getText().trim();
 							if (trimmed) customAnswer = trimmed;
 							if (canSubmit()) done(false);
 							return;
-						}
-
-						if (matchesKey(data, Key.escape)) {
-							done(true);
 						}
 					}
 
