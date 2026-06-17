@@ -83,9 +83,9 @@ function createHarness(
 	const registerTool = vi.fn();
 	const on = vi.fn();
 	askExtension({ on, registerTool } as any);
-	const handler = on.mock.calls[0][1];
+	const handler = on.mock.calls[0]![1]!;
 	handler(undefined, { mode: "tui" });
-	const tool = registerTool.mock.calls[0][0];
+	const tool = registerTool.mock.calls[0]![0]!;
 
 	const mockUiCustom = vi.fn().mockImplementation(
 		(callback: (tui: any, theme: any, kb: any, done: (v: boolean) => void) => any) =>
@@ -124,6 +124,8 @@ function createHarness(
 		// calls onSubmit → done(false) for plain Enter.
 		// Shift+Enter / Alt+Enter are intercepted above to insert \n.
 		pressEnter: () => handleInput!("\r"),
+		pressShiftEnter: () => handleInput!("\x1b[13;2u"),
+		pressAltEnter: () => handleInput!("\x1b\r"),
 		pressSpace: () => handleInput!(" "),
 		pressEsc: () => handleInput!("\x1b"),
 		type: (text: string) => {
@@ -142,11 +144,11 @@ describe("registration", () => {
 		askExtension({ on, registerTool } as any);
 		expect(on).toHaveBeenCalledWith("session_start", expect.any(Function));
 
-		const handler = on.mock.calls[0][1];
+		const handler = on.mock.calls[0]![1]!;
 		await handler(undefined, { mode: "tui" });
 
 		expect(registerTool).toHaveBeenCalledOnce();
-		const tool = registerTool.mock.calls[0][0];
+		const tool = registerTool.mock.calls[0]![0]!;
 		expect(tool.name).toBe("ask_user_question");
 		expect(tool.label).toBe("AskUserQuestion");
 		expect(tool.parameters).toBe(AskParams);
@@ -156,7 +158,7 @@ describe("registration", () => {
 		const registerTool = vi.fn();
 		const on = vi.fn();
 		askExtension({ on, registerTool } as any);
-		const handler = on.mock.calls[0][1];
+		const handler = on.mock.calls[0]![1]!;
 		for (const mode of ["print", "json", "rpc"]) {
 			await handler(undefined, { mode });
 		}
@@ -383,9 +385,9 @@ describe("execute — empty options", () => {
 		const registerTool = vi.fn();
 		const on = vi.fn();
 		askExtension({ on, registerTool } as any);
-		const handler = on.mock.calls[0][1];
+		const handler = on.mock.calls[0]![1]!;
 		await handler(undefined, { mode: "tui" });
-		const tool = registerTool.mock.calls[0][0];
+		const tool = registerTool.mock.calls[0]![0]!;
 
 		const result = await tool.execute(
 			"id",
