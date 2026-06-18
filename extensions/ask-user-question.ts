@@ -478,48 +478,41 @@ export default function askExtension(pi: ExtensionAPI) {
 
         const state = new PromptState(cfg);
 
-        const cancelled = await execCtx.ui.custom<boolean>(
-          (tui, theme, _kb, done) => {
-            const editorTheme: EditorTheme = {
-              borderColor: (s) => theme.fg(C.accent, s),
-              selectList: {
-                selectedPrefix: (t) => theme.fg(C.accent, t),
-                selectedText: (t) => theme.fg(C.accent, t),
-                description: (t) => theme.fg(C.muted, t),
-                scrollInfo: (t) => theme.fg(C.dim, t),
-                noMatch: (t) => theme.fg(C.warning, t),
-              },
-            };
+        const cancelled = await execCtx.ui.custom<boolean>((tui, theme, _kb, done) => {
+          const editorTheme: EditorTheme = {
+            borderColor: (s) => theme.fg(C.accent, s),
+            selectList: {
+              selectedPrefix: (t) => theme.fg(C.accent, t),
+              selectedText: (t) => theme.fg(C.accent, t),
+              description: (t) => theme.fg(C.muted, t),
+              scrollInfo: (t) => theme.fg(C.dim, t),
+              noMatch: (t) => theme.fg(C.warning, t),
+            },
+          };
 
-            const editor = new Editor(tui, editorTheme);
+          const editor = new Editor(tui, editorTheme);
 
-            const { render, invalidate, refresh } = buildRender(
-              tui,
-              theme,
-              state,
-              editor,
-            );
+          const { render, invalidate, refresh } = buildRender(tui, theme, state, editor);
 
-            editor.onSubmit = (value: string) => {
-              const trimmed = value.trim();
-              if (trimmed) state.customAnswer = trimmed;
-              if (state.canSubmit()) {
-                done(false);
-              } else {
-                // Restore the text and show feedback
-                editor.setText(trimmed);
-                state.feedback = state.customAnswer
-                  ? `Maximum ${cfg.maxSelections} selection(s)`
-                  : "Select an option or type an answer";
-                refresh();
-              }
-            };
+          editor.onSubmit = (value: string) => {
+            const trimmed = value.trim();
+            if (trimmed) state.customAnswer = trimmed;
+            if (state.canSubmit()) {
+              done(false);
+            } else {
+              // Restore the text and show feedback
+              editor.setText(trimmed);
+              state.feedback = state.customAnswer
+                ? `Maximum ${cfg.maxSelections} selection(s)`
+                : "Select an option or type an answer";
+              refresh();
+            }
+          };
 
-            const handleInput = createInputHandler(state, editor, refresh, done);
+          const handleInput = createInputHandler(state, editor, refresh, done);
 
-            return { render, invalidate, handleInput };
-          },
-        );
+          return { render, invalidate, handleInput };
+        });
 
         if (cancelled) {
           return {
@@ -560,8 +553,7 @@ export default function askExtension(pi: ExtensionAPI) {
       renderResult(result, _options, theme, _context) {
         const details = result.details as AskResult | undefined;
         if (!details || (details.selections.length === 0 && !details.answer)) {
-          const text =
-            result.content[0]?.type === "text" ? result.content[0].text : "";
+          const text = result.content[0]?.type === "text" ? result.content[0].text : "";
           if (text.toLowerCase().includes("cancelled")) {
             return new Text(theme.fg(C.warning, "✗ Cancelled"), 0, 0);
           }

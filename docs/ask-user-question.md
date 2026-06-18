@@ -8,11 +8,11 @@ A pi extension that adds an `ask_user_question` tool for prompting the user with
 
 ## Parameters
 
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `question` | `string` | — | The question to ask the user |
-| `options` | `{label, description?}[]` | — | Available choices |
-| `allowMultiple` | `boolean` | `false` | Allow selecting multiple options |
+| Parameter       | Type                      | Default | Description                      |
+| --------------- | ------------------------- | ------- | -------------------------------- |
+| `question`      | `string`                  | —       | The question to ask the user     |
+| `options`       | `{label, description?}[]` | —       | Available choices                |
+| `allowMultiple` | `boolean`                 | `false` | Allow selecting multiple options |
 
 Write-in is **always on** — there is no `allowWriteIn` parameter. The user can always type a custom answer in addition to picking options. At least one selection (option or write-in) is required (or the user cancels with Esc).
 
@@ -56,7 +56,7 @@ The LLM receives a conversational text in `content` and minimal structured data 
 interface AskResult {
   question: string;
   selections: { label: string; description?: string }[];
-  answer?: string;   // custom write-in, if any
+  answer?: string; // custom write-in, if any
 }
 ```
 
@@ -102,23 +102,23 @@ Two focus zones: the **options list** and the **write-in field**. The arrow (`>`
 
 ### Options focused (starting state)
 
-| Key | Single-select | Multi-select |
-|-----|---------------|--------------|
-| **↑↓** | Navigate options | Navigate options |
-| **Enter** | Select highlighted option + submit | Submit all toggled options |
-| **Space** | Hold option (combine with write-in) | Toggle option on/off |
-| **↓** on last option | Move focus to write-in field | Move focus to write-in field |
-| **Esc** | Cancel | Cancel |
+| Key                  | Single-select                       | Multi-select                 |
+| -------------------- | ----------------------------------- | ---------------------------- |
+| **↑↓**               | Navigate options                    | Navigate options             |
+| **Enter**            | Select highlighted option + submit  | Submit all toggled options   |
+| **Space**            | Hold option (combine with write-in) | Toggle option on/off         |
+| **↓** on last option | Move focus to write-in field        | Move focus to write-in field |
+| **Esc**              | Cancel                              | Cancel                       |
 
 ### Write-in focused
 
-| Key | Action |
-|-----|--------|
-| **↑** | Move focus to options (last option) |
-| **Enter** | **Submit** everything (options + write-in text) |
-| **Esc** | Cancel |
-| Letters/numbers | Type into the field |
-| **Space** | Type a space |
+| Key             | Action                                          |
+| --------------- | ----------------------------------------------- |
+| **↑**           | Move focus to options (last option)             |
+| **Enter**       | **Submit** everything (options + write-in text) |
+| **Esc**         | Cancel                                          |
+| Letters/numbers | Type into the field                             |
+| **Space**       | Type a space                                    |
 
 ### Write-in field
 

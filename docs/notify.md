@@ -7,31 +7,32 @@ A pi extension that alerts you when the agent finishes a turn and is waiting for
 
 ## How it works
 
-The extension listens to the `agent_end` event (for normal turn completion) and the `tool_call` event (when the agent uses tools like `ask_user_question` to pause for input). It fires notifications through every available backend. 
+The extension listens to the `agent_end` event (for normal turn completion) and the `tool_call` event (when the agent uses tools like `ask_user_question` to pause for input). It fires notifications through every available backend.
 
 Notifications only fire if **two conditions** are met:
+
 1. **Interactive (TUI) mode** — subagents, RPC, print, and JSON modes are silently skipped.
 2. **Terminal is unfocused** — it hooks into XTerm Focus Tracking (DECSET 1004) to monitor window focus. If you are actively looking at the terminal when the agent finishes, the notification is cleanly suppressed to prevent spam.
 
-*(Note for `tmux` users: You must have `set -g focus-events on` in your `~/.tmux.conf` for focus tracking to pass through to pi).*
+_(Note for `tmux` users: You must have `set -g focus-events on` in your `~/.tmux.conf` for focus tracking to pass through to pi)._
 
 ## Supported backends
 
-| Backend | OS | Detection | Scope | Sound |
-|---------|----|-----------|-------|-------|
-| **macOS** | macOS | `which osascript` | Desktop popup (native Notification Center) | System default (`sound name "default"`) |
-| **Linux** | Linux | `which notify-send` | Desktop popup (freedesktop) | `sound-name:message` (daemon-dependent) |
-| **Windows Toast** | Windows (WSL) | `WT_SESSION` + `which powershell.exe` | Desktop toast | System default (automatic) |
-| **OSC 99** | Kitty | `KITTY_WINDOW_ID` | Terminal notification | None (visual only) |
-| **OSC 777** | Ghostty, iTerm2, WezTerm, rxvt-unicode | Default fallback | Terminal notification | None (visual only) |
+| Backend           | OS                                     | Detection                             | Scope                                      | Sound                                   |
+| ----------------- | -------------------------------------- | ------------------------------------- | ------------------------------------------ | --------------------------------------- |
+| **macOS**         | macOS                                  | `which osascript`                     | Desktop popup (native Notification Center) | System default (`sound name "default"`) |
+| **Linux**         | Linux                                  | `which notify-send`                   | Desktop popup (freedesktop)                | `sound-name:message` (daemon-dependent) |
+| **Windows Toast** | Windows (WSL)                          | `WT_SESSION` + `which powershell.exe` | Desktop toast                              | System default (automatic)              |
+| **OSC 99**        | Kitty                                  | `KITTY_WINDOW_ID`                     | Terminal notification                      | None (visual only)                      |
+| **OSC 777**       | Ghostty, iTerm2, WezTerm, rxvt-unicode | Default fallback                      | Terminal notification                      | None (visual only)                      |
 
 ### Sound behavior by OS
 
-| OS | Mechanism | Default sound |
-|----|-----------|---------------|
-| **macOS** | `osascript display notification ... sound name "default"` | Plays the system notification sound (same as Messages, Mail, etc.) |
-| **Windows** | PowerShell toast notification | Plays the system notification sound automatically |
-| **Linux** | `notify-send --hint=string:sound-name:message` | Depends on the notification daemon — GNOME Shell and Plasma play it; Dunst ignores it by default but can be configured |
+| OS          | Mechanism                                                 | Default sound                                                                                                          |
+| ----------- | --------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| **macOS**   | `osascript display notification ... sound name "default"` | Plays the system notification sound (same as Messages, Mail, etc.)                                                     |
+| **Windows** | PowerShell toast notification                             | Plays the system notification sound automatically                                                                      |
+| **Linux**   | `notify-send --hint=string:sound-name:message`            | Depends on the notification daemon — GNOME Shell and Plasma play it; Dunst ignores it by default but can be configured |
 
 On Linux, if you want guaranteed sound regardless of daemon, set up your notification daemon to respect `sound-name` hints or use a separate sound player alongside the notification.
 
@@ -68,33 +69,33 @@ Only backends whose binary is found are enabled. If you install a missing binary
 
 ## Notification content
 
-| Field | Value |
-|-------|-------|
-| Title | `Pi` |
-| Body | `Done — "<user's prompt>"` (truncated to 72 chars) |
+| Field | Value                                              |
+| ----- | -------------------------------------------------- |
+| Title | `Pi`                                               |
+| Body  | `Done — "<user's prompt>"` (truncated to 72 chars) |
 
 When no user prompt is found in the event messages, falls back to `Done — waiting for input`.
 
 ### Examples
 
-| User prompt | Notification body |
-|-------------|-------------------|
-| `fix the login bug` | `Done — "fix the login bug"` |
-| `refactor the auth module to use JWT` | `Done — "refactor the auth module to use JWT"` |
+| User prompt                                                                  | Notification body                                                   |
+| ---------------------------------------------------------------------------- | ------------------------------------------------------------------- |
+| `fix the login bug`                                                          | `Done — "fix the login bug"`                                        |
+| `refactor the auth module to use JWT`                                        | `Done — "refactor the auth module to use JWT"`                      |
 | `this is a very long user prompt that exceeds the maximum truncation length` | `Done — "this is a very long user prompt that exceeds the maximu…"` |
-| _(no user prompt — e.g. follow-up turn)_ | `Done — waiting for input` |
+| _(no user prompt — e.g. follow-up turn)_                                     | `Done — waiting for input`                                          |
 
 ## Startup message
 
 On `session_start`, a one-line info notification shows which backends are active:
 
-| Platform | Example output |
-|----------|---------------|
-| macOS + Ghostty | `Notify: desktop (macOS), OSC 777 (Background only)` |
-| Linux + notify-send + Ghostty | `Notify: desktop (Linux), OSC 777 (Background only)` |
-| Linux, no notify-send | `Notify: OSC 777 (Background only)` |
-| Kitty (any OS) | `Notify: desktop (Linux), OSC 99 (Kitty) (Background only)` |
-| WSL + Windows Terminal | `Notify: Windows Toast (Background only)` |
+| Platform                      | Example output                                              |
+| ----------------------------- | ----------------------------------------------------------- |
+| macOS + Ghostty               | `Notify: desktop (macOS), OSC 777 (Background only)`        |
+| Linux + notify-send + Ghostty | `Notify: desktop (Linux), OSC 777 (Background only)`        |
+| Linux, no notify-send         | `Notify: OSC 777 (Background only)`                         |
+| Kitty (any OS)                | `Notify: desktop (Linux), OSC 99 (Kitty) (Background only)` |
+| WSL + Windows Terminal        | `Notify: Windows Toast (Background only)`                   |
 
 ## Non-interactive modes
 
