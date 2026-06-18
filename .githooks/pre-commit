@@ -1,0 +1,21 @@
+#!/bin/sh
+
+echo "🔍 Running Prettier and ESLint..."
+
+# Run formatting and linting
+npm run format
+npm run lint
+
+# Capture the exit code of lint
+LINT_CODE=$?
+
+if [ $LINT_CODE -ne 0 ]; then
+  echo "❌ Linting failed! Please fix the errors before committing."
+  exit 1
+fi
+
+# Re-stage any files that Prettier just modified
+# (Only updates files that are already tracked and have changes)
+git add -u
+
+echo "✅ All checks passed!"

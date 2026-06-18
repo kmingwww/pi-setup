@@ -18,7 +18,8 @@
   "scripts": {
     "test": "vitest run",
     "format": "prettier --write .",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "prepare": "git config --local core.hooksPath .githooks"
   },
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "^0.79.4",
