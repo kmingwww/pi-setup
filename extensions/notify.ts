@@ -15,6 +15,7 @@
  */
 
 import { execFile } from "node:child_process";
+import type { AgentEndEvent, AgentToolResult } from "@earendil-works/pi-coding-agent";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 // ---------------------------------------------------------------------------
@@ -48,22 +49,26 @@ const backends: NotificationBackends = {
 // ---------------------------------------------------------------------------
 
 /** Walk messages in reverse to find the last user prompt. */
-function extractPrompt(messages: any[]): string | undefined {
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const msg = messages[i]!;
-    if (msg.role !== "user" || !msg.content) continue;
+/** Content block type from the agent SDK */
+type ContentBlock = AgentToolResult<unknown>["content"][number];
 
-    const content = msg.content;
-    if (typeof content === "string") return content;
-    if (Array.isArray(content)) {
-      const text = content
-        .filter((b: any) => b.type === "text")
-        .map((b: any) => b.text)
-        .join(" ");
-      if (text) return text;
-    }
-  }
-  return undefined;
+function extractPrompt(messages: AgentEndEvent["messages"]): string | undefined {
+	for (let i = messages.length - 1; i >= 0; i--) {
+		const msg = messages[i]!;
+		if (msg.role !== "user" || !msg.content) continue;
+
+		const content = msg.content;
+		if (typeof content === "string") return content;
+		if (Array.isArray(content)) {
+			const text = content
+				.filter((b): b is Extract<ContentBlock, { type: "text" }> => b.type === "text")
+				.map((b) => b.text)
+				.join(" ");
+			if (text) return text;
+		}
+	}
+	return undefined;
+}
 }
 
 /** Build the notification body, including a truncated quote of the user's prompt. */

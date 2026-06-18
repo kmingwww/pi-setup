@@ -1,13 +1,14 @@
 {
-  "name": "pi-ask",
+  "name": "pi-setup",
   "version": "0.1.0",
-  "description": "A pi package with an ask tool for user questions — single/multi-select with optional write-in",
+  "description": "A collection of core pi extensions including delegate-task, ask-user-question, and notify.",
   "keywords": [
     "pi-package",
+    "swarm",
+    "agent",
+    "delegate",
     "ask",
-    "question",
-    "prompt",
-    "user-input"
+    "notify"
   ],
   "license": "MIT",
   "peerDependencies": {
@@ -36,7 +37,7 @@
   },
   "pi": {
     "extensions": [
-      "./extensions"
+      "./extensions/*"
     ]
   }
 }
