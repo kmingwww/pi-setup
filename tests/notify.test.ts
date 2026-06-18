@@ -380,7 +380,8 @@ describe("notify extension", () => {
 			const osaCall = spawned.find((s) => s[0] === "osascript");
 			expect(osaCall).toBeDefined();
 			expect(osaCall![1]).toBe("-e");
-			expect(osaCall![2]).toContain(`display notification "${body}"`);
+			const safeBody = body.replace(/(["\\])/g, '\\$1');
+			expect(osaCall![2]).toContain(`display notification "${safeBody}"`);
 			expect(osaCall![2]).toContain('with title "Pi"');
 			expect(osaCall![2]).toContain('sound name "default"');
 

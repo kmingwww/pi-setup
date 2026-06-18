@@ -106,16 +106,20 @@ function notifyLinux(title: string, body: string): void {
 /** macOS native notification. `sound name "default"` plays the system
  *  notification sound — same as Messages, Mail, etc. */
 function notifyMacOS(title: string, body: string): void {
+	const safeTitle = title.replace(/(["\\])/g, '\\$1');
+	const safeBody = body.replace(/(["\\])/g, '\\$1');
 	execFile("osascript", [
 		"-e",
-		`display notification "${body}" with title "${title}" sound name "default"`,
+		`display notification "${safeBody}" with title "${safeTitle}" sound name "default"`,
 	]);
 }
 
 /** Windows Toast notification. Plays the system default notification sound
  *  automatically (no explicit sound config needed). */
 function notifyWindows(title: string, body: string): void {
-	execFile("powershell.exe", ["-NoProfile", "-Command", windowsToastScript(title, body)]);
+	const safeTitle = title.replace(/'/g, "''");
+	const safeBody = body.replace(/'/g, "''");
+	execFile("powershell.exe", ["-NoProfile", "-Command", windowsToastScript(safeTitle, safeBody)]);
 }
 
 // --- Terminal escape-code notifications (no sound — purely visual) ---
