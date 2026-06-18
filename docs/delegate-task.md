@@ -6,11 +6,11 @@ Spawns background child agents from pi's main session. Each child runs in a head
 
 ### `delegate_task`
 
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `agentType` | `string` | Role name, maps to `{agentType}.md` in `.pi/agents/` or `~/.pi/agents/` |
-| `task` | `string` | Self-contained instructions — the child agent has **no memory** of your conversation |
-| `mode` | `"sync" \| "async"` | `"sync"` blocks until done; `"async"` not yet implemented |
+| Parameter   | Type                | Description                                                                          |
+| ----------- | ------------------- | ------------------------------------------------------------------------------------ |
+| `agentType` | `string`            | Role name, maps to `{agentType}.md` in `.pi/agents/` or `~/.pi/agents/`              |
+| `task`      | `string`            | Self-contained instructions — the child agent has **no memory** of your conversation |
+| `mode`      | `"sync" \| "async"` | `"sync"` blocks until done; `"async"` not yet implemented                            |
 
 Max delegation depth: 5 levels.
 
@@ -39,13 +39,13 @@ AgentSession.subscribe()   pi.registerTool()
 
 ## Streaming
 
-Uses `sub.subscribe()` (canonical `AgentSession` API, *not* `sub.agent.subscribe()`):
+Uses `sub.subscribe()` (canonical `AgentSession` API, _not_ `sub.agent.subscribe()`):
 
-| Event | Action |
-|-------|--------|
-| `message_update` + `text_delta` | Re-emit current status |
-| `tool_execution_start` | Push `{label, status: "running"}` to tool log |
-| `tool_execution_end` | Replace matching "running" entry with "done" or "error" |
+| Event                           | Action                                                  |
+| ------------------------------- | ------------------------------------------------------- |
+| `message_update` + `text_delta` | Re-emit current status                                  |
+| `tool_execution_start`          | Push `{label, status: "running"}` to tool log           |
+| `tool_execution_end`            | Replace matching "running" entry with "done" or "error" |
 
 Pi executes tools in parallel by default, so `tool_execution_start`/`tool_execution_end` can interleave. We match end events back to their running entries by scanning for the tool name prefix — no shared mutable state.
 
@@ -61,6 +61,7 @@ Pi executes tools in parallel by default, so `tool_execution_start`/`tool_execut
 ## Display
 
 ### Streaming
+
 ```
 [researcher] 3 tools
 web_search "pi agent docs"       ✓
@@ -69,6 +70,7 @@ read /home/user/config.ts        ○
 ```
 
 ### Final
+
 ```
 ✓ researcher done · 3 tools
   The latest pi documentation is available at...
@@ -77,14 +79,17 @@ read /home/user/config.ts        ○
 ## Agent files
 
 Discovered in order:
+
 1. `.agent/agents/{type}.md` (legacy)
 2. `.pi/agents/{type}.md` (project-local)
 3. `~/.pi/agents/{type}.md` (global)
 
 YAML frontmatter:
+
 ```yaml
 ---
-tools: ['read', 'web_search', 'fetch_content']
+tools: ["read", "web_search", "fetch_content"]
 ---
 ```
+
 Body after `---` becomes the system prompt.

@@ -48,27 +48,25 @@ const backends: NotificationBackends = {
 // Context extraction from agent messages
 // ---------------------------------------------------------------------------
 
-/** Walk messages in reverse to find the last user prompt. */
 /** Content block type from the agent SDK */
 type ContentBlock = AgentToolResult<unknown>["content"][number];
 
 function extractPrompt(messages: AgentEndEvent["messages"]): string | undefined {
-	for (let i = messages.length - 1; i >= 0; i--) {
-		const msg = messages[i]!;
-		if (msg.role !== "user" || !msg.content) continue;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = messages[i]!;
+    if (msg.role !== "user" || !msg.content) continue;
 
-		const content = msg.content;
-		if (typeof content === "string") return content;
-		if (Array.isArray(content)) {
-			const text = content
-				.filter((b): b is Extract<ContentBlock, { type: "text" }> => b.type === "text")
-				.map((b) => b.text)
-				.join(" ");
-			if (text) return text;
-		}
-	}
-	return undefined;
-}
+    const content = msg.content;
+    if (typeof content === "string") return content;
+    if (Array.isArray(content)) {
+      const text = content
+        .filter((b): b is Extract<ContentBlock, { type: "text" }> => b.type === "text")
+        .map((b) => b.text)
+        .join(" ");
+      if (text) return text;
+    }
+  }
+  return undefined;
 }
 
 /** Build the notification body, including a truncated quote of the user's prompt. */

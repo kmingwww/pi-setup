@@ -8,7 +8,9 @@ export default async function (pi: ExtensionAPI) {
   agentManager.register("root", null, "root", "Main agent session");
 
   // Create a followUp callback bound to the main session for async completion notifications.
-  const followUp = async (text: string) => { pi.sendUserMessage(text, { deliverAs: "followUp" }); };
+  const followUp = async (text: string) => {
+    pi.sendUserMessage(text, { deliverAs: "followUp" });
+  };
 
   const tools = createAgentTools("root", followUp);
 

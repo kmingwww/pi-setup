@@ -12,7 +12,11 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { AgentManager, findAgentFile, parseAgentFile } from "./agent-manager";
 import { createAgentTools } from "./tools";
-import type { AgentSession, AgentSessionEvent, AgentToolResult } from "@earendil-works/pi-coding-agent";
+import type {
+  AgentSession,
+  AgentSessionEvent,
+  AgentToolResult,
+} from "@earendil-works/pi-coding-agent";
 
 /** Truncate long strings, appending "…" when shortened. */
 function truncate(s: string, max: number): string {
@@ -40,7 +44,9 @@ export function extractResult(state: Pick<AgentSession["agent"]["state"], "messa
     if (!msg || msg.role !== "assistant" || !("content" in msg)) continue;
     const content = msg.content;
     if (typeof content === "string" || content.length === 0) continue;
-    const textBlock = content.find((c): c is Extract<ContentBlock, { type: "text" }> => c.type === "text");
+    const textBlock = content.find(
+      (c): c is Extract<ContentBlock, { type: "text" }> => c.type === "text",
+    );
     if (textBlock && typeof textBlock.text === "string") {
       const text = textBlock.text.trim();
       if (text) return text;
@@ -110,9 +116,9 @@ export async function runWorker(
     // - check_agent_statuses is always injected (read-only introspection, useful to all agents).
     // - delegate_task is only injected when the agent file explicitly opts in via frontmatter.
     const allChildTools = createAgentTools(childAgentId);
-    const statusTool = allChildTools.find(t => t.name === "check_agent_statuses")!;
+    const statusTool = allChildTools.find((t) => t.name === "check_agent_statuses")!;
     const delegateTool = tools?.includes("delegate_task")
-      ? allChildTools.find(t => t.name === "delegate_task")
+      ? allChildTools.find((t) => t.name === "delegate_task")
       : undefined;
 
     const toolNames = [...(tools ?? ["read", "bash", "edit", "write"])];
@@ -120,9 +126,7 @@ export async function runWorker(
       toolNames.push("check_agent_statuses");
     }
 
-    const customTools = delegateTool
-      ? [statusTool, delegateTool]
-      : [statusTool];
+    const customTools = delegateTool ? [statusTool, delegateTool] : [statusTool];
 
     const loader = new DefaultResourceLoader({
       cwd: process.cwd(),
@@ -131,12 +135,7 @@ export async function runWorker(
     });
     await loader.reload();
 
-    const sessionDir = path.join(
-      os.tmpdir(),
-      "spawned_agents",
-      mainSessionId,
-      childAgentId,
-    );
+    const sessionDir = path.join(os.tmpdir(), "spawned_agents", mainSessionId, childAgentId);
     await fs.mkdir(sessionDir, { recursive: true });
 
     const { session: sub } = await createAgentSession({
@@ -161,10 +160,7 @@ export async function runWorker(
        * Build a label from tool name + most descriptive arg.
        * Generic: picks the first short string argument — works for any tool.
        */
-      const toolLabel = (
-        name: string,
-        args: Record<string, unknown> | undefined,
-      ): string => {
+      const toolLabel = (name: string, args: Record<string, unknown> | undefined): string => {
         if (!args) return name;
         for (const v of Object.values(args)) {
           // Short string (path, command, query, pattern, url)
@@ -205,11 +201,7 @@ export async function runWorker(
             // Replace the last "running" entry for this tool name (robust pairing)
             for (let i = toolLog.length - 1; i >= 0; i--) {
               const entry = toolLog[i];
-              if (
-                entry &&
-                entry.label.startsWith(`${name} `) &&
-                entry.status === "running"
-              ) {
+              if (entry && entry.label.startsWith(`${name} `) && entry.status === "running") {
                 toolLog[i] = {
                   ...entry,
                   status: ok ? "done" : "error",
