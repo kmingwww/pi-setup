@@ -135,6 +135,18 @@ function notifyOSC99(title: string, body: string): void {
 
 export default function (pi: ExtensionAPI) {
 	let isFocused = true; // Assume focused until terminal tells us otherwise
+	let hasNotifiedThisWait = false;
+
+	function triggerNotification(title: string, body: string) {
+		if (hasNotifiedThisWait) return;
+		hasNotifiedThisWait = true;
+
+		if (backends.macos) notifyMacOS(title, body);
+		if (backends.linux) notifyLinux(title, body);
+		if (backends.windowsToast) notifyWindows(title, body);
+		if (backends.osc99) notifyOSC99(title, body);
+		if (backends.osc777) notifyOSC777(title, body);
+	}
 
 	function handleStdinData(data: Buffer) {
 		const str = data.toString();
@@ -191,6 +203,16 @@ export default function (pi: ExtensionAPI) {
 		process.stdin.removeListener("data", handleStdinData);
 	});
 
+	pi.on("agent_start", async () => {
+		hasNotifiedThisWait = false;
+	});
+
+	pi.on("tool_result", async (event) => {
+		if (event.toolName === "ask_user_question") {
+			hasNotifiedThisWait = false;
+		}
+	});
+
 	pi.on("agent_end", async (event, ctx) => {
 		if (ctx.mode !== "tui" || isFocused || !probeComplete) return;
 
@@ -198,10 +220,20 @@ export default function (pi: ExtensionAPI) {
 		const prompt = extractPrompt(event.messages);
 		const body = buildBody(prompt);
 
-		if (backends.macos) notifyMacOS(title, body);
-		if (backends.linux) notifyLinux(title, body);
-		if (backends.windowsToast) notifyWindows(title, body);
-		if (backends.osc99) notifyOSC99(title, body);
-		if (backends.osc777) notifyOSC777(title, body);
+		triggerNotification(title, body);
+	});
+
+	pi.on("tool_call", async (event, ctx) => {
+		if (ctx.mode !== "tui" || isFocused || !probeComplete) return;
+		if (event.toolName === "ask_user_question") {
+			const title = "Pi — Question";
+			const q = event.input.question;
+			const questionStr = typeof q === "string" ? q : "Waiting for user input...";
+			const maxLen = 72;
+			const truncated = questionStr.length > maxLen ? questionStr.slice(0, maxLen - 3).trimEnd() + "…" : questionStr;
+			const body = `Question: "${truncated}"`;
+
+			triggerNotification(title, body);
+		}
 	});
 }

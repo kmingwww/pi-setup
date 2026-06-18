@@ -26,6 +26,9 @@ interface HandlerMap {
 	agent_end?: Function;
 	session_start?: Function;
 	session_shutdown?: Function;
+	tool_call?: Function;
+	agent_start?: Function;
+	tool_result?: Function;
 }
 
 /** Create a minimal mock ExtensionAPI and capture registered handlers. */
@@ -188,15 +191,18 @@ describe("notify extension", () => {
 	// Registration
 	// ===================================================================
 	describe("registration", () => {
-		it("registers agent_end and session_start handlers", async () => {
+		it("registers expected event handlers", async () => {
 			const pi = createMockPi();
 			const factory = await loadNotify();
 			await factory(pi as any);
 
-			expect(pi.on).toHaveBeenCalledTimes(3);
+			expect(pi.on).toHaveBeenCalledTimes(6);
 			expect(pi.handlers.agent_end).toBeDefined();
 			expect(pi.handlers.session_start).toBeDefined();
 			expect(pi.handlers.session_shutdown).toBeDefined();
+			expect(pi.handlers.tool_call).toBeDefined();
+			expect(pi.handlers.agent_start).toBeDefined();
+			expect(pi.handlers.tool_result).toBeDefined();
 		});
 	});
 
@@ -760,6 +766,7 @@ describe("notify extension", () => {
 			expect(stdoutWrite).not.toHaveBeenCalledWith(expect.stringContaining("\x1b]777"));
 		});
 
+
 		it("cleans up stdin listener on session_shutdown", async () => {
 			const pi = createMockPi();
 			const factory = await loadNotify();
@@ -789,6 +796,49 @@ describe("notify extension", () => {
 
 			await pi.handlers.session_shutdown!(undefined, ctx);
 			expect(stdoutWrite).not.toHaveBeenCalledWith("\x1b[?1004l");
+		});
+	});
+
+	describe("tool_call", () => {
+		it("notifies when ask_user_question is called", async () => {
+			delete process.env.WT_SESSION;
+			delete process.env.KITTY_WINDOW_ID;
+
+			const pi = createMockPi();
+			const factory = await loadNotify({ notifySend: true });
+			await factory(pi as any);
+
+			await pi.handlers.session_start!(undefined, tuiCtx());
+			simulateFocusOut();
+			stdoutWrite.mockClear();
+
+			const event = {
+				toolName: "ask_user_question",
+				input: { question: "Are you sure?" },
+			};
+			await pi.handlers.tool_call!(event, tuiCtx());
+
+			expect(stdoutWrite).toHaveBeenCalledWith(
+				expect.stringContaining(`\x1b]777;notify;Pi — Question;Question: "Are you sure?"\x07`),
+			);
+		});
+
+		it("ignores other tools", async () => {
+			const pi = createMockPi();
+			const factory = await loadNotify();
+			await factory(pi as any);
+
+			await pi.handlers.session_start!(undefined, tuiCtx());
+			simulateFocusOut();
+			stdoutWrite.mockClear();
+
+			const event = {
+				toolName: "bash",
+				input: { command: "ls" },
+			};
+			await pi.handlers.tool_call!(event, tuiCtx());
+
+			expect(stdoutWrite).not.toHaveBeenCalled();
 		});
 	});
 });

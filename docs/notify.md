@@ -7,7 +7,7 @@ A pi extension that alerts you when the agent finishes a turn and is waiting for
 
 ## How it works
 
-The extension listens to the `agent_end` event and fires notifications through every available backend. 
+The extension listens to the `agent_end` event (for normal turn completion) and the `tool_call` event (when the agent uses tools like `ask_user_question` to pause for input). It fires notifications through every available backend. 
 
 Notifications only fire if **two conditions** are met:
 1. **Interactive (TUI) mode** — subagents, RPC, print, and JSON modes are silently skipped.
