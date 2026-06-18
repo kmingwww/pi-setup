@@ -262,7 +262,8 @@ function buildRender(
   }
 
   function renderOption(lines: string[], index: number, width: number): void {
-    const opt = state.cfg.options[index]!;
+    const opt = state.cfg.options[index];
+    if (!opt) return;
     const isFocused = !state.writeinFocused && index === state.cursorIndex;
     const selected = state.selections.has(index);
     const mark = optionMark(selected, state.cfg.allowMultiple);

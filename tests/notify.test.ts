@@ -8,10 +8,10 @@ import type { execFile as ExecFileFn } from "node:child_process";
 let _execFileImpl: typeof ExecFileFn | null = null;
 
 vi.mock("node:child_process", () => ({
-  execFile: (...args: any[]) => {
+  execFile: (...args: unknown[]) => {
     if (!_execFileImpl)
       throw new Error("execFile mock not configured — call setExecFileImpl() first");
-    return (_execFileImpl as Function)(...args);
+    return (_execFileImpl as (...args: unknown[]) => unknown)(...args);
   },
 }));
 
@@ -23,25 +23,13 @@ function setExecFileImpl(fn: typeof ExecFileFn) {
 // Test helpers
 // ---------------------------------------------------------------------------
 
-interface HandlerMap {
-  agent_end?: Function;
-  session_start?: Function;
-  session_shutdown?: Function;
-  tool_call?: Function;
-  agent_start?: Function;
-  tool_result?: Function;
-}
-
 /** Create a minimal mock ExtensionAPI and capture registered handlers. */
-function createMockPi(): {
-  on: ReturnType<typeof vi.fn>;
-  handlers: HandlerMap;
-} {
-  const handlers: HandlerMap = {};
+function createMockPi(): { on: ReturnType<typeof vi.fn>; handlers: Record<string, Function> } {
+  const handlers: Record<string, Function> = {};
   return {
     handlers,
     on: vi.fn((event: string, handler: Function) => {
-      (handlers as any)[event] = handler;
+      handlers[event] = handler;
     }),
   };
 }
@@ -122,7 +110,6 @@ describe("notify extension", () => {
   let originalEnv: typeof process.env;
   let stdoutWrite: ReturnType<typeof vi.fn>;
 
-  let stdinOn: ReturnType<typeof vi.fn>;
   let stdinRemove: ReturnType<typeof vi.fn>;
   let stdinListeners: Map<string, Function>;
 
@@ -130,21 +117,23 @@ describe("notify extension", () => {
     originalEnv = { ...process.env };
     vi.resetModules();
     stdoutWrite = vi.fn();
-    vi.spyOn(process.stdout, "write").mockImplementation(stdoutWrite);
+    const stdoutSpy = vi.spyOn(process.stdout, "write");
+    stdoutSpy.mockImplementation(stdoutWrite as any);
 
     stdinListeners = new Map();
-    stdinOn = vi.spyOn(process.stdin, "on").mockImplementation((event, listener) => {
-      stdinListeners.set(event as string, listener as Function);
+    const stdinOnSpy = vi.spyOn(process.stdin, "on");
+    stdinOnSpy.mockImplementation((event: any, listener: any) => {
+      stdinListeners.set(event, listener);
       return process.stdin;
     });
-    stdinRemove = vi
-      .spyOn(process.stdin, "removeListener")
-      .mockImplementation((event, listener) => {
-        if (stdinListeners.get(event as string) === listener) {
-          stdinListeners.delete(event as string);
-        }
-        return process.stdin;
-      });
+    const removeSpy = vi.spyOn(process.stdin, "removeListener");
+    removeSpy.mockImplementation((event: any, listener: any) => {
+      if (stdinListeners.get(event as string) === listener) {
+        stdinListeners.delete(event as string);
+      }
+      return process.stdin;
+    });
+    stdinRemove = removeSpy;
   });
 
   afterEach(() => {

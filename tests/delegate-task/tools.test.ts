@@ -1,14 +1,15 @@
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { agentManager } from "../../extensions/delegate-task/agent-manager";
 import { createAgentTools } from "../../extensions/delegate-task/tools";
 import * as runWorkerModule from "../../extensions/delegate-task/run-worker";
 
 describe("createAgentTools", () => {
-  let followUp: any;
+  let followUp: ReturnType<typeof vi.fn<(text: string) => Promise<void>>>;
 
   beforeEach(() => {
     agentManager.agents.clear();
-    followUp = vi.fn().mockResolvedValue(undefined);
+    followUp = vi.fn<(text: string) => Promise<void>>().mockResolvedValue(undefined);
     // mock runWorker
     vi.spyOn(runWorkerModule, "runWorker").mockResolvedValue("Worker mock result");
     // mock runWorkerAsync (fire and forget)
@@ -37,7 +38,7 @@ describe("createAgentTools", () => {
 
     const mockCtx = {
       sessionManager: { getSessionId: () => "session-123" },
-    } as any;
+    } as unknown as ExtensionContext;
 
     const result = await delegateTool!.execute(
       "some-call-id",
@@ -70,10 +71,10 @@ describe("createAgentTools", () => {
 
     const result = await statusTool!.execute(
       "some-call-id",
-      {} as any,
+      {} as unknown as Record<string, unknown>,
       undefined,
       undefined,
-      {} as any,
+      {} as unknown as ExtensionContext,
     );
 
     const expectedStatus = agentManager.getAgentStatuses("main-agent");
@@ -100,7 +101,7 @@ describe("createAgentTools", () => {
       },
       undefined,
       undefined,
-      {} as any,
+      {} as unknown as ExtensionContext,
     );
 
     expect(result).toEqual({
@@ -122,7 +123,7 @@ describe("createAgentTools", () => {
 
       const mockCtx = {
         sessionManager: { getSessionId: () => "session-123" },
-      } as any;
+      } as unknown as ExtensionContext;
 
       const result = await delegateTool!.execute(
         "some-call-id",
@@ -152,7 +153,7 @@ describe("createAgentTools", () => {
 
       const mockCtx = {
         sessionManager: { getSessionId: () => "session-123" },
-      } as any;
+      } as unknown as ExtensionContext;
 
       await delegateTool!.execute(
         "some-call-id",
@@ -182,7 +183,7 @@ describe("createAgentTools", () => {
 
       const mockCtx = {
         sessionManager: { getSessionId: () => "session-123" },
-      } as any;
+      } as unknown as ExtensionContext;
 
       await delegateTool!.execute(
         "some-call-id",
@@ -219,7 +220,7 @@ describe("createAgentTools", () => {
         },
         undefined,
         undefined,
-        {} as any,
+        {} as unknown as ExtensionContext,
       );
 
       expect(result).toEqual({

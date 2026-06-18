@@ -18,6 +18,7 @@ describe("AgentManager", () => {
   });
 
   it("aborts all running sessions on abortAll", async () => {
+    // as any: AgentSession has private members so only a real instance or any works
     const mockSession1 = { abort: vi.fn().mockResolvedValue(undefined) } as any;
     const mockSession2 = { abort: vi.fn().mockResolvedValue(undefined) } as any;
 
@@ -63,7 +64,7 @@ describe("AgentManager", () => {
   });
 
   it("marks an agent as done and frees the session memory", () => {
-    manager.register("id-1", null, "coder", "task", { mockSession: true } as any);
+    manager.register("id-1", null, "coder", "task", { abort: vi.fn() } as any);
     manager.markDone("id-1", "Success!");
 
     const agent = manager.agents.get("id-1");
@@ -117,8 +118,8 @@ describe("findAgentFile", () => {
     vi.spyOn(process, "cwd").mockReturnValue("/project");
 
     // Make access succeed for the first path
-    vi.spyOn(fs, "access").mockImplementation(async (p: any) => {
-      if (p.includes(".agent/agents/coder.md")) return undefined;
+    vi.spyOn(fs, "access").mockImplementation(async (p) => {
+      if (String(p).includes(".agent/agents/coder.md")) return undefined;
       throw new Error("Not found");
     });
 
@@ -130,8 +131,9 @@ describe("findAgentFile", () => {
     vi.spyOn(os, "homedir").mockReturnValue("/home/user");
     vi.spyOn(process, "cwd").mockReturnValue("/project");
 
-    vi.spyOn(fs, "access").mockImplementation(async (p: any) => {
-      if (p.includes(".pi/agents/coder.md") && p.includes("/project")) return undefined;
+    vi.spyOn(fs, "access").mockImplementation(async (p) => {
+      if (String(p).includes(".pi/agents/coder.md") && String(p).includes("/project"))
+        return undefined;
       throw new Error("Not found");
     });
 
@@ -143,8 +145,8 @@ describe("findAgentFile", () => {
     vi.spyOn(os, "homedir").mockReturnValue("/home/user");
     vi.spyOn(process, "cwd").mockReturnValue("/project");
 
-    vi.spyOn(fs, "access").mockImplementation(async (p: any) => {
-      if (p.includes("/home/user/.pi/agents/coder.md")) return undefined;
+    vi.spyOn(fs, "access").mockImplementation(async (p) => {
+      if (String(p).includes("/home/user/.pi/agents/coder.md")) return undefined;
       throw new Error("Not found");
     });
 

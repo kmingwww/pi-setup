@@ -15,7 +15,7 @@ vi.mock("@earendil-works/pi-coding-agent", () => {
   }
   return {
     DefaultResourceLoader: MockDefaultResourceLoader,
-    defineTool: vi.fn((def: any) => def),
+    defineTool: vi.fn((def: unknown) => def),
     getAgentDir: vi.fn().mockReturnValue("/mock/agent/dir"),
     SessionManager: {
       create: vi.fn().mockReturnValue({}),
@@ -39,7 +39,7 @@ vi.mock("@earendil-works/pi-coding-agent", () => {
 function setupMocks() {
   vi.spyOn(os, "homedir").mockReturnValue("/home/user");
   vi.spyOn(os, "tmpdir").mockReturnValue("/tmp");
-  vi.spyOn(fs, "mkdir").mockResolvedValue(undefined as any);
+  vi.spyOn(fs, "mkdir").mockResolvedValue(undefined);
   vi.spyOn(fs, "readFile").mockResolvedValue('---\ntools: ["read"]\n---\nmock body');
   vi.spyOn(fs, "access").mockResolvedValue(undefined);
   vi.spyOn(process, "cwd").mockReturnValue("/project");
@@ -131,12 +131,12 @@ describe("runWorker", () => {
 // ── runWorkerAsync (fire-and-forget) ──
 describe("runWorkerAsync", () => {
   let manager: AgentManager;
-  let followUp: any;
+  let followUp: ReturnType<typeof vi.fn<(text: string) => Promise<void>>>;
 
   beforeEach(async () => {
     vi.resetAllMocks();
     manager = new AgentManager();
-    followUp = vi.fn().mockResolvedValue(undefined);
+    followUp = vi.fn<(text: string) => Promise<void>>().mockResolvedValue(undefined);
     setupMocks();
     await setupSessionMock();
   });

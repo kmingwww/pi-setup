@@ -1,8 +1,10 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { describe, it, expect, vi } from "vitest";
 import askExtension, {
   buildContentSummary,
   AskParams,
   AskOptionSchema,
+  type AskResult,
 } from "../extensions/ask-user-question";
 import { Key, matchesKey } from "@earendil-works/pi-tui";
 
@@ -59,7 +61,7 @@ vi.mock("@earendil-works/pi-tui", async (importOriginal) => {
 
 interface Harness {
   /** Await this to get the execute result (resolves when done() is called) */
-  result: Promise<any>;
+  result: Promise<{ content: { type: string; text: string }[]; details: AskResult }>;
   doneSpy: ReturnType<typeof vi.fn>;
   pressUp: () => void;
   pressDown: () => void;
@@ -82,13 +84,20 @@ function createHarness(
 
   const registerTool = vi.fn();
   const on = vi.fn();
-  askExtension({ on, registerTool } as any);
+  askExtension({ on, registerTool } as unknown as ExtensionAPI);
   const handler = on.mock.calls[0]![1]!;
   handler(undefined, { mode: "tui" });
   const tool = registerTool.mock.calls[0]![0]!;
 
   const mockUiCustom = vi.fn().mockImplementation(
-    (callback: (tui: any, theme: any, kb: any, done: (v: boolean) => void) => any) =>
+    (
+      callback: (
+        tui: unknown,
+        theme: unknown,
+        kb: unknown,
+        done: (v: boolean) => void,
+      ) => { handleInput: (data: string) => void },
+    ) =>
       new Promise<boolean>((resolve) => {
         const done = (value: boolean) => {
           doneSpy(value);
@@ -141,7 +150,7 @@ describe("registration", () => {
   it("registers tool in TUI mode", async () => {
     const registerTool = vi.fn();
     const on = vi.fn();
-    askExtension({ on, registerTool } as any);
+    askExtension({ on, registerTool } as unknown as ExtensionAPI);
     expect(on).toHaveBeenCalledWith("session_start", expect.any(Function));
 
     const handler = on.mock.calls[0]![1]!;
@@ -157,7 +166,7 @@ describe("registration", () => {
   it("skips registration in non-TUI modes", async () => {
     const registerTool = vi.fn();
     const on = vi.fn();
-    askExtension({ on, registerTool } as any);
+    askExtension({ on, registerTool } as unknown as ExtensionAPI);
     const handler = on.mock.calls[0]![1]!;
     for (const mode of ["print", "json", "rpc"]) {
       await handler(undefined, { mode });
@@ -220,7 +229,7 @@ describe("interactive — single-select", () => {
     h.pressEnter();
     const r = await h.result;
     expect(h.doneSpy).toHaveBeenCalledWith(false);
-    expect(r.content[0].text).toBe("The user chose Alpha.");
+    expect(r.content[0]!.text).toBe("The user chose Alpha.");
     expect(r.details.selections).toEqual([{ label: "Alpha" }]);
   });
 
@@ -257,7 +266,7 @@ describe("interactive — single-select", () => {
     const r = await h.result;
     expect(r.details.selections).toEqual([{ label: "Alpha" }]);
     expect(r.details.answer).toBe("custom text");
-    expect(r.content[0].text).toBe('The user chose Alpha and added: "custom text".');
+    expect(r.content[0]!.text).toBe('The user chose Alpha and added: "custom text".');
   });
 
   it("Enter from write-in submits (always)", async () => {
@@ -269,7 +278,7 @@ describe("interactive — single-select", () => {
     const r = await h.result;
     expect(r.details.answer).toBe("hello");
     expect(r.details.selections).toEqual([]);
-    expect(r.content[0].text).toBe('The user wrote: "hello".');
+    expect(r.content[0]!.text).toBe('The user wrote: "hello".');
   });
 
   it("Enter from empty write-in does nothing (needs selection or text)", async () => {
@@ -284,7 +293,7 @@ describe("interactive — single-select", () => {
     h.pressEsc();
     const r = await h.result;
     expect(h.doneSpy).toHaveBeenCalledWith(true);
-    expect(r.content[0].text).toBe("The user cancelled.");
+    expect(r.content[0]!.text).toBe("The user cancelled.");
   });
 
   it("Esc cancels from write-in", async () => {
@@ -294,7 +303,7 @@ describe("interactive — single-select", () => {
     h.pressEsc();
     const r = await h.result;
     expect(h.doneSpy).toHaveBeenCalledWith(true);
-    expect(r.content[0].text).toBe("The user cancelled.");
+    expect(r.content[0]!.text).toBe("The user cancelled.");
   });
 
   it("↓ past last option moves to write-in, ↑ goes back", async () => {
@@ -377,7 +386,7 @@ describe("interactive — multi-select", () => {
     h.pressSpace();
     h.pressEsc();
     const r = await h.result;
-    expect(r.content[0].text).toBe("The user cancelled.");
+    expect(r.content[0]!.text).toBe("The user cancelled.");
   });
 });
 
@@ -388,7 +397,7 @@ describe("execute — empty options", () => {
   it("returns error", async () => {
     const registerTool = vi.fn();
     const on = vi.fn();
-    askExtension({ on, registerTool } as any);
+    askExtension({ on, registerTool } as unknown as ExtensionAPI);
     const handler = on.mock.calls[0]![1]!;
     await handler(undefined, { mode: "tui" });
     const tool = registerTool.mock.calls[0]![0]!;

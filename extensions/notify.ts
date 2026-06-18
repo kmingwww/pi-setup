@@ -19,6 +19,18 @@ import type { AgentEndEvent, AgentToolResult } from "@earendil-works/pi-coding-a
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 // ---------------------------------------------------------------------------
+// Security: strip control chars from strings inserted into terminal escapes
+// ---------------------------------------------------------------------------
+
+/** Strip ASCII control characters that could break terminal escape sequences.
+ *  Keeps tabs, newlines, and other common whitespace — only removes chars
+ *  that can hijack or terminate an OSC sequence (BEL, ESC, CSI, ST). */
+function sanitizeForSequence(raw: string): string {
+  // eslint-disable-next-line no-control-regex
+  return raw.replace(/[\x07\x1b\x9b\x9c]/g, "");
+}
+
+// ---------------------------------------------------------------------------
 // Probe what's available on this system (runs once at extension load)
 // ---------------------------------------------------------------------------
 
@@ -52,8 +64,8 @@ const backends: NotificationBackends = {
 type ContentBlock = AgentToolResult<unknown>["content"][number];
 
 function extractPrompt(messages: AgentEndEvent["messages"]): string | undefined {
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const msg = messages[i]!;
+  // Iterate in reverse without indexed access — avoids non-null assertion
+  for (const msg of [...messages].reverse()) {
     if (msg.role !== "user" || !msg.content) continue;
 
     const content = msg.content;
@@ -123,12 +135,14 @@ function notifyWindows(title: string, body: string): void {
 // --- Terminal escape-code notifications (no sound — purely visual) ---
 
 function notifyOSC777(title: string, body: string): void {
-  process.stdout.write(`\x1b]777;notify;${title};${body}\x07`);
+  process.stdout.write(
+    `\x1b]777;notify;${sanitizeForSequence(title)};${sanitizeForSequence(body)}\x07`,
+  );
 }
 
 function notifyOSC99(title: string, body: string): void {
-  process.stdout.write(`\x1b]99;i=1:d=0;${title}\x1b\\`);
-  process.stdout.write(`\x1b]99;i=1:p=body;${body}\x1b\\`);
+  process.stdout.write(`\x1b]99;i=1:d=0;${sanitizeForSequence(title)}\x1b\\`);
+  process.stdout.write(`\x1b]99;i=1:p=body;${sanitizeForSequence(body)}\x1b\\`);
 }
 
 // ---------------------------------------------------------------------------
