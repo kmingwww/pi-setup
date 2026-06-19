@@ -18,14 +18,13 @@ describe("AgentManager", () => {
   });
 
   it("aborts all running sessions on abortAll", async () => {
-    // as any: AgentSession has private members so only a real instance or any works
     const mockSession1 = { abort: vi.fn().mockResolvedValue(undefined) } as any;
     const mockSession2 = { abort: vi.fn().mockResolvedValue(undefined) } as any;
 
-    manager.register("id-1", null, "coder", "task 1", mockSession1);
-    manager.register("id-2", null, "coder", "task 2", mockSession2);
+    manager.register("id-1", "coder", "task 1", undefined, mockSession1);
+    manager.register("id-2", "coder", "task 2", undefined, mockSession2);
 
-    manager.markDone("id-2", "done"); // id-2 is done, should not be aborted
+    manager.markDone("id-2", "done");
 
     await manager.abortAll();
 
@@ -33,57 +32,120 @@ describe("AgentManager", () => {
     expect(mockSession2.abort).not.toHaveBeenCalled();
   });
 
-  it("registers a root agent at depth 1", () => {
-    const depth = manager.register("root-id", null, "coder", "do some work");
-    expect(depth).toBe(1);
-    expect(manager.agents.get("root-id")).toMatchObject({
-      parentId: null,
-      depth: 1,
+  it("registers an agent", () => {
+    manager.register("id-1", "coder", "do some work");
+    const agent = manager.agents.get("id-1");
+    expect(agent).toMatchObject({
       status: "running",
       agentType: "coder",
-      task: "do some work",
+      currentTask: "do some work",
     });
   });
 
-  it("tracks depth hierarchically", () => {
-    manager.register("root-id", null, "coder", "task 1");
-    const childDepth = manager.register("child-id", "root-id", "researcher", "task 2");
-    expect(childDepth).toBe(2);
-  });
-
-  it("throws an error if max depth of 5 is exceeded", () => {
-    manager.register("id-1", null, "coder", "task");
-    manager.register("id-2", "id-1", "coder", "task");
-    manager.register("id-3", "id-2", "coder", "task");
-    manager.register("id-4", "id-3", "coder", "task");
-    manager.register("id-5", "id-4", "coder", "task"); // Depth 5
-
-    expect(() => {
-      manager.register("id-6", "id-5", "coder", "task"); // Depth 6
-    }).toThrow("Max agent depth (5) exceeded.");
-  });
-
-  it("marks an agent as done and frees the session memory", () => {
-    manager.register("id-1", null, "coder", "task", { abort: vi.fn() } as any);
+  it("marks an agent as idle and keeps the session reference", () => {
+    const mockSession = { abort: vi.fn() } as any;
+    manager.register("id-1", "coder", "task", undefined, mockSession);
     manager.markDone("id-1", "Success!");
 
     const agent = manager.agents.get("id-1");
-    expect(agent?.status).toBe("done");
+    expect(agent?.status).toBe("idle");
     expect(agent?.result).toBe("Success!");
-    expect(agent?.session).toBeUndefined();
+    // Session is kept alive for reuse
+    expect(agent?.session).toBe(mockSession);
   });
 
-  it("formats the team status correctly", () => {
-    manager.register("id-1", null, "manager", "coordinate team");
-    manager.register("id-2", "id-1", "researcher", "find docs");
+  it("reports active agent count", () => {
+    manager.register("id-1", "coder", "task 1");
+    manager.register("id-2", "researcher", "task 2");
+    manager.markDone("id-2", "done");
+
+    expect(manager.getActiveCount()).toBe(1);
+  });
+
+  it("markRunning reassigns a task to an idle agent", () => {
+    manager.register("id-1", "coder", "first task");
+    manager.markDone("id-1", "done");
+    manager.markRunning("id-1", "second task");
+
+    const agent = manager.agents.get("id-1");
+    expect(agent?.status).toBe("running");
+    expect(agent?.currentTask).toBe("second task");
+  });
+
+  it("disposeAgent disposes session and removes agent", () => {
+    const mockSession = { dispose: vi.fn() } as any;
+    manager.register("id-1", "coder", "task", undefined, mockSession);
+
+    manager.disposeAgent("id-1");
+
+    expect(mockSession.dispose).toHaveBeenCalled();
+    expect(manager.agents.has("id-1")).toBe(false);
+  });
+
+  it("disposeAll cleans up all agents", () => {
+    const s1 = { dispose: vi.fn() } as any;
+    const s2 = { dispose: vi.fn() } as any;
+    manager.register("id-1", "coder", "t1", undefined, s1);
+    manager.register("id-2", "coder", "t2", undefined, s2);
+
+    manager.disposeAll();
+
+    expect(s1.dispose).toHaveBeenCalled();
+    expect(s2.dispose).toHaveBeenCalled();
+    expect(manager.agents.size).toBe(0);
+  });
+
+  it("formats the team status as a flat list", () => {
+    manager.register("id-1", "manager", "coordinate team");
+    manager.register("id-2", "researcher", "find docs");
     manager.markDone("id-2", "docs found");
 
-    const status = manager.getAgentStatuses("test-agent");
-    expect(status).toContain("TEAM ACTIVITY:");
+    const status = manager.getAgentStatuses();
+    expect(status).toContain("AVAILABLE AGENTS:");
     expect(status).toContain("- [RUNNING] manager (id-1)");
     expect(status).toContain("Task: coordinate team");
-    expect(status).toContain("- [DONE] researcher (id-2)");
-    expect(status).toContain("Task: find docs");
+    expect(status).toContain("- [IDLE] researcher (id-2)");
+    expect(status).toContain("Last: docs found");
+  });
+
+  it("notifyAgent routes to mainNotify for main", async () => {
+    const fn = vi.fn().mockResolvedValue(undefined);
+    manager.mainNotify = fn;
+
+    await manager.notifyAgent("main", "hello");
+
+    expect(fn).toHaveBeenCalledWith("hello");
+  });
+
+  it("notifyAgent stores on headless agent record", async () => {
+    manager.register("agent-1", "researcher", "task");
+
+    await manager.notifyAgent("agent-1", "result done");
+
+    const agent = manager.agents.get("agent-1")!;
+    expect(agent.notifications).toEqual(["result done"]);
+  });
+
+  it("getAgentStatuses shows and drains notifications for the caller", () => {
+    manager.register("agent-1", "researcher", "task");
+    manager.agents.get("agent-1")!.notifications.push("✅ researcher done: found docs");
+
+    const status = manager.getAgentStatuses("agent-1");
+    expect(status).toContain("PENDING RESULTS FROM DELEGATED TASKS:");
+    expect(status).toContain("✅ researcher done: found docs");
+
+    // Notifications are drained
+    expect(manager.agents.get("agent-1")!.notifications).toEqual([]);
+  });
+
+  it("getAgentStatuses does not drain notifications for non-caller agents", () => {
+    manager.register("agent-1", "researcher", "task");
+    manager.register("agent-2", "coder", "task");
+    manager.agents.get("agent-1")!.notifications.push("secret");
+
+    const status = manager.getAgentStatuses("agent-2");
+    expect(status).not.toContain("PENDING RESULTS");
+    expect(manager.agents.get("agent-1")!.notifications).toEqual(["secret"]);
   });
 });
 
@@ -117,7 +179,6 @@ describe("findAgentFile", () => {
     vi.spyOn(os, "homedir").mockReturnValue("/home/user");
     vi.spyOn(process, "cwd").mockReturnValue("/project");
 
-    // Make access succeed for the first path
     vi.spyOn(fs, "access").mockImplementation(async (p) => {
       if (String(p).includes(".agent/agents/coder.md")) return undefined;
       throw new Error("Not found");

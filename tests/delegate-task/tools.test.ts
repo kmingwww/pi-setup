@@ -5,35 +5,37 @@ import { createAgentTools } from "../../extensions/delegate-task/tools";
 import * as runWorkerModule from "../../extensions/delegate-task/run-worker";
 
 describe("createAgentTools", () => {
-  let followUp: ReturnType<typeof vi.fn<(text: string) => Promise<void>>>;
-
   beforeEach(() => {
     agentManager.agents.clear();
-    followUp = vi.fn<(text: string) => Promise<void>>().mockResolvedValue(undefined);
+    agentManager.mainNotify = undefined;
     // mock runWorker
     vi.spyOn(runWorkerModule, "runWorker").mockResolvedValue("Worker mock result");
     // mock runWorkerAsync (fire and forget)
-    vi.spyOn(runWorkerModule, "runWorkerAsync").mockImplementation(() => {
-      // Simulates async execution: immediately calls followUp after microtask
-      Promise.resolve().then(() => {
-        followUp("✅ researcher done: Worker mock result");
-      });
-    });
+    vi.spyOn(runWorkerModule, "runWorkerAsync").mockImplementation(
+      (_task, _agentType, _sessionId, _manager, callerId, _agentId) => {
+        const msg = "✅ researcher done: Worker mock result";
+        if (callerId === "main") {
+          agentManager.mainNotify?.(msg);
+        } else {
+          agentManager.agents.get(callerId)?.notifications.push(msg);
+        }
+      },
+    );
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
   });
 
-  it("creates tools including delegate_task and check_agent_statuses", () => {
-    const tools = createAgentTools("main-agent", followUp);
+  it("creates tools including delegate_task and list_agents", () => {
+    const tools = createAgentTools("main");
     expect(tools.length).toBe(2);
     expect(tools[0]!.name).toBe("delegate_task");
-    expect(tools[1]!.name).toBe("check_agent_statuses");
+    expect(tools[1]!.name).toBe("list_agents");
   });
 
   it("delegate_task sync delegates to runWorker and returns result", async () => {
-    const tools = createAgentTools("main-agent", followUp);
+    const tools = createAgentTools("main");
     const delegateTool = tools.find((t) => t.name === "delegate_task");
 
     const mockCtx = {
@@ -55,19 +57,76 @@ describe("createAgentTools", () => {
     expect(runWorkerModule.runWorker).toHaveBeenCalledWith(
       "find pi",
       "researcher",
-      "main-agent",
       "session-123",
       agentManager,
+      undefined, // no agentId
+      undefined, // no cwd
       expect.any(Function),
     );
     expect(result.content).toEqual([{ type: "text", text: "Worker mock result" }]);
     expect(result.details).toEqual({ agentType: "researcher", tools: [] });
   });
 
-  it("check_agent_statuses returns agent statuses from manager", async () => {
-    agentManager.register("child-1", "main-agent", "researcher", "doing math");
-    const tools = createAgentTools("main-agent", followUp);
-    const statusTool = tools.find((t) => t.name === "check_agent_statuses");
+  it("delegate_task sync with agentId passes it to runWorker", async () => {
+    const tools = createAgentTools("main");
+    const delegateTool = tools.find((t) => t.name === "delegate_task");
+
+    const mockCtx = {
+      sessionManager: { getSessionId: () => "session-123" },
+    } as unknown as ExtensionContext;
+
+    await delegateTool!.execute(
+      "call-id",
+      {
+        agentType: "coder",
+        task: "fix bug",
+        mode: "sync",
+        agentId: "agent-existing-1",
+      },
+      undefined,
+      undefined,
+      mockCtx,
+    );
+
+    expect(runWorkerModule.runWorker).toHaveBeenCalledWith(
+      "fix bug",
+      "coder",
+      "session-123",
+      agentManager,
+      "agent-existing-1",
+      undefined, // no cwd
+      expect.any(Function),
+    );
+  });
+
+  it("list_agents shows pending notifications from the caller's notifications array", async () => {
+    const agentId = "agent-with-notifs";
+    agentManager.register(agentId, "researcher", "doing math");
+    agentManager.agents.get(agentId)!.notifications.push("✅ researcher done: found the answer");
+
+    const tools = createAgentTools(agentId);
+    const statusTool = tools.find((t) => t.name === "list_agents")!;
+
+    const result = await statusTool.execute(
+      "some-call-id",
+      {} as unknown as Record<string, unknown>,
+      undefined,
+      undefined,
+      {} as unknown as ExtensionContext,
+    );
+
+    const text = result.content[0]!.text as string;
+    expect(text).toContain("PENDING RESULTS FROM DELEGATED TASKS");
+    expect(text).toContain("✅ researcher done: found the answer");
+
+    // Notifications should be drained after reading
+    expect(agentManager.agents.get(agentId)!.notifications).toHaveLength(0);
+  });
+
+  it("list_agents returns agent statuses from manager", async () => {
+    agentManager.register("child-1", "researcher", "doing math");
+    const tools = createAgentTools("main");
+    const statusTool = tools.find((t) => t.name === "list_agents");
 
     const result = await statusTool!.execute(
       "some-call-id",
@@ -77,48 +136,90 @@ describe("createAgentTools", () => {
       {} as unknown as ExtensionContext,
     );
 
-    const expectedStatus = agentManager.getAgentStatuses("main-agent");
+    const expectedStatus = agentManager.getAgentStatuses();
     expect(result).toEqual({ content: [{ type: "text", text: expectedStatus }], details: {} });
   });
 
-  it("delegate_task rejects if depth >= 5", async () => {
-    // Set up a deep hierarchy
-    agentManager.register("agent-1", null, "t", "t");
-    agentManager.register("agent-2", "agent-1", "t", "t");
-    agentManager.register("agent-3", "agent-2", "t", "t");
-    agentManager.register("agent-4", "agent-3", "t", "t");
-    agentManager.register("agent-5", "agent-4", "t", "t"); // depth 5
+  describe("renderCall", () => {
+    const mockTheme = {
+      fg: (_color: string, text: string) => text,
+      bold: (text: string) => text,
+    };
 
-    const tools = createAgentTools("agent-5", followUp);
-    const delegateTool = tools.find((t) => t.name === "delegate_task");
+    it("handles undefined args without throwing and returns sensible defaults", () => {
+      const tools = createAgentTools("main");
+      const delegateTool = tools.find((t) => t.name === "delegate_task");
 
-    const result = await delegateTool!.execute(
-      "some-call-id",
-      {
-        agentType: "researcher",
-        task: "find pi",
-        mode: "sync",
-      },
-      undefined,
-      undefined,
-      {} as unknown as ExtensionContext,
-    );
+      // Should not throw when called with undefined args
+      let result: any;
+      expect(() => {
+        result = delegateTool!.renderCall(undefined, mockTheme as any);
+      }).not.toThrow();
 
-    expect(result).toEqual({
-      content: [
-        {
-          type: "text",
-          text: "Error: Maximum delegation depth of 5 reached. Cannot delegate further.",
-        },
-      ],
-      details: { agentType: "researcher", tools: [] },
+      // Should return a Text component with sensible defaults
+      expect(result).toBeDefined();
+      // The text should contain the default agent type "?"
+      expect(result.text).toContain("?");
+      // Should not contain agentId reference (since agentId is undefined)
+      expect(result.text).not.toContain("→");
     });
-    expect(runWorkerModule.runWorker).not.toHaveBeenCalled();
+
+    it("uses consistent short-form (8 chars) for agentId in renderCall output", () => {
+      const tools = createAgentTools("main");
+      const delegateTool = tools.find((t) => t.name === "delegate_task");
+
+      const longId = "agent-550e8400-e29b-41d4-a716-446655440000";
+
+      const result = delegateTool!.renderCall(
+        { agentType: "coder", task: "fix bug", mode: "sync", agentId: longId },
+        mockTheme as any,
+      );
+
+      // Extract the ID shown after the arrow
+      const arrowMatch = result.text.match(/→\s+(\S+)/);
+      expect(arrowMatch).not.toBeNull();
+      const shownId = arrowMatch![1]!;
+      // Must be exactly 8 chars
+      expect(shownId.length).toBe(8);
+      expect(shownId).toBe(longId.slice(0, 8));
+    });
+  });
+
+  describe("list_agents output", () => {
+    const mockTheme = {
+      fg: (_color: string, text: string) => text,
+      bold: (text: string) => text,
+    };
+
+    it("uses consistent short-form (8 chars) for agent IDs in status output", async () => {
+      const longId = "agent-550e8400-e29b-41d4-a716-446655440000";
+      agentManager.register(longId, "researcher", "find docs");
+
+      const tools = createAgentTools("main");
+      const statusTool = tools.find((t) => t.name === "list_agents")!;
+
+      const result = await statusTool.execute(
+        "some-call-id",
+        {} as unknown as Record<string, unknown>,
+        undefined,
+        undefined,
+        {} as unknown as ExtensionContext,
+      );
+
+      const text = result.content[0]!.text as string;
+      // Find the agent ID in parentheses after the agent type
+      const match = text.match(/researcher\s+\(([^)]+)\)/);
+      expect(match).not.toBeNull();
+      const shownId = match![1]!;
+      // Must be exactly 8 chars
+      expect(shownId.length).toBe(8);
+      expect(shownId).toBe(longId.slice(0, 8));
+    });
   });
 
   describe("async mode", () => {
     it("returns immediate acknowledgment for async mode", async () => {
-      const tools = createAgentTools("main-agent", followUp);
+      const tools = createAgentTools("main");
       const delegateTool = tools.find((t) => t.name === "delegate_task");
 
       const mockCtx = {
@@ -137,18 +238,17 @@ describe("createAgentTools", () => {
         mockCtx,
       );
 
-      // Should return immediately with acknowledgment
       expect(result.content).toEqual([
         {
           type: "text",
-          text: "Background task delegated to researcher. You will be notified when it completes.",
+          text: expect.stringContaining("Background task delegated to researcher."),
         },
       ]);
       expect(result.details).toEqual({ agentType: "researcher", tools: [] });
     });
 
     it("calls runWorkerAsync with correct params for async mode", async () => {
-      const tools = createAgentTools("main-agent", followUp);
+      const tools = createAgentTools("main");
       const delegateTool = tools.find((t) => t.name === "delegate_task");
 
       const mockCtx = {
@@ -170,15 +270,16 @@ describe("createAgentTools", () => {
       expect(runWorkerModule.runWorkerAsync).toHaveBeenCalledWith(
         "find pi docs",
         "researcher",
-        "main-agent",
         "session-123",
         agentManager,
-        followUp,
+        "main", // callerId
+        undefined, // no agentId
+        undefined, // no cwd
       );
     });
 
-    it("does not call runWorker (sync) for async mode", async () => {
-      const tools = createAgentTools("main-agent", followUp);
+    it("async mode does not call runWorker (sync)", async () => {
+      const tools = createAgentTools("main");
       const delegateTool = tools.find((t) => t.name === "delegate_task");
 
       const mockCtx = {
@@ -197,42 +298,7 @@ describe("createAgentTools", () => {
         mockCtx,
       );
 
-      // runWorker (sync) should NOT be called for async mode
       expect(runWorkerModule.runWorker).not.toHaveBeenCalled();
-    });
-
-    it("rejects async mode if depth >= 5", async () => {
-      agentManager.register("agent-1", null, "t", "t");
-      agentManager.register("agent-2", "agent-1", "t", "t");
-      agentManager.register("agent-3", "agent-2", "t", "t");
-      agentManager.register("agent-4", "agent-3", "t", "t");
-      agentManager.register("agent-5", "agent-4", "t", "t"); // depth 5
-
-      const tools = createAgentTools("agent-5", followUp);
-      const delegateTool = tools.find((t) => t.name === "delegate_task");
-
-      const result = await delegateTool!.execute(
-        "some-call-id",
-        {
-          agentType: "researcher",
-          task: "find pi",
-          mode: "async",
-        },
-        undefined,
-        undefined,
-        {} as unknown as ExtensionContext,
-      );
-
-      expect(result).toEqual({
-        content: [
-          {
-            type: "text",
-            text: "Error: Maximum delegation depth of 5 reached. Cannot delegate further.",
-          },
-        ],
-        details: { agentType: "researcher", tools: [] },
-      });
-      expect(runWorkerModule.runWorkerAsync).not.toHaveBeenCalled();
     });
   });
 });

@@ -1,4 +1,4 @@
-/** Spawns a headless child AgentSession. Emits structured ToolLogEntry[] via onUpdate. */
+/** Spawns / targets a child AgentSession. Emits structured ToolLogEntry[] via onUpdate. */
 
 import fs from "fs/promises";
 import path from "path";
@@ -18,7 +18,6 @@ import type {
   AgentToolResult,
 } from "@earendil-works/pi-coding-agent";
 
-/** Truncate long strings, appending "…" when shortened. */
 function truncate(s: string, max: number): string {
   if (s.length <= max) return s;
   return s.slice(0, max - 1) + "…";
@@ -30,7 +29,58 @@ export interface ToolLogEntry {
   status: "running" | "done" | "error";
 }
 
-/** Content block type from the agent SDK — TextContent | ImageContent */
+/**
+ * Subscribe to a session's event stream and route structured tool-log entries
+ * to onUpdate. Starts with a fresh empty toolLog so stale entries from
+ * previous runs are not carried over.
+ */
+function wireToolStream(session: AgentSession, onUpdate: (entries: ToolLogEntry[]) => void): void {
+  const toolLog: ToolLogEntry[] = [];
+
+  const toolLabel = (name: string, args: Record<string, unknown> | undefined): string => {
+    if (!args) return name;
+    for (const v of Object.values(args)) {
+      if (typeof v === "string" && v.length > 0 && v.length < 200) {
+        const preview = v.length > 40 ? v.slice(0, 40) + "…" : v;
+        return `${name} ${preview}`;
+      }
+      if (Array.isArray(v) && v.length > 0 && typeof v[0] === "string") {
+        const preview = v[0].length > 40 ? v[0].slice(0, 40) + "…" : v[0];
+        return `${name} ${preview}`;
+      }
+    }
+    return name;
+  };
+
+  const emit = () => onUpdate([...toolLog]);
+
+  session.subscribe((event: AgentSessionEvent) => {
+    switch (event.type) {
+      case "message_update": {
+        if (event.assistantMessageEvent?.type === "text_delta") emit();
+        break;
+      }
+      case "tool_execution_start": {
+        toolLog.push({ label: toolLabel(event.toolName, event.args), status: "running" });
+        emit();
+        break;
+      }
+      case "tool_execution_end": {
+        const ok = !event.isError;
+        for (let i = toolLog.length - 1; i >= 0; i--) {
+          const entry = toolLog[i];
+          if (entry && entry.label.startsWith(`${event.toolName} `) && entry.status === "running") {
+            toolLog[i] = { ...entry, status: ok ? "done" : "error" };
+            break;
+          }
+        }
+        emit();
+        break;
+      }
+    }
+  });
+}
+
 type ContentBlock = AgentToolResult<unknown>["content"][number];
 
 /** Extract the last assistant text block from agent state. */
@@ -43,7 +93,12 @@ export function extractResult(state: Pick<AgentSession["agent"]["state"], "messa
     const msg = state.messages[i];
     if (!msg || msg.role !== "assistant" || !("content" in msg)) continue;
     const content = msg.content;
-    if (typeof content === "string" || content.length === 0) continue;
+    if (typeof content === "string") {
+      const text = content.trim();
+      if (text) return text;
+      continue;
+    }
+    if (content.length === 0) continue;
     const textBlock = content.find(
       (c): c is Extract<ContentBlock, { type: "text" }> => c.type === "text",
     );
@@ -56,165 +111,112 @@ export function extractResult(state: Pick<AgentSession["agent"]["state"], "messa
   return "Task completed, but no text output was generated.";
 }
 
-/**
- * Fire-and-forget async wrapper around runWorker.
- * Calls runWorker in the background and uses the followUp callback
- * to notify the parent session when complete (or on error).
- *
- * Never throws — errors are caught and reported via followUp.
- */
-export function runWorkerAsync(
-  task: string,
+async function createChildSession(
   agentType: string,
-  parentId: string | null,
   mainSessionId: string,
-  manager: AgentManager,
-  followUp: (text: string) => Promise<void>,
+  childAgentId: string,
+  cwd?: string,
   onUpdate?: (entries: ToolLogEntry[]) => void,
-): void {
-  // Fire and forget — intentionally not awaited
-  void (async () => {
+): Promise<AgentSession> {
+  const agentCwd = cwd ?? process.cwd();
+  const contextPath = await findAgentFile(agentType, agentCwd);
+
+  let rawContent = "You are a helpful background agent.";
+  if (contextPath) {
     try {
-      const result = await runWorker(task, agentType, parentId, mainSessionId, manager, onUpdate);
-      await followUp(`✅ ${agentType} done: ${truncate(result, 280)}`);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      await followUp(`❌ ${agentType} failed: ${truncate(message, 280)}`);
+      rawContent = await fs.readFile(contextPath, "utf-8");
+    } catch {
+      // Falls back to default
     }
-  })();
+  }
+
+  const { body, tools } = parseAgentFile(rawContent);
+
+  // Both tools always available to every agent
+  const allChildTools = createAgentTools(childAgentId);
+  const statusTool = allChildTools.find((t) => t.name === "list_agents")!;
+  const delegateTool = allChildTools.find((t) => t.name === "delegate_task")!;
+  const customTools = [statusTool, delegateTool];
+
+  const toolNames = [...(tools ?? ["read", "bash", "edit", "write"])];
+  if (!toolNames.includes("list_agents")) toolNames.push("list_agents");
+  if (!toolNames.includes("delegate_task")) toolNames.push("delegate_task");
+
+  const loader = new DefaultResourceLoader({
+    cwd: agentCwd,
+    agentDir: getAgentDir(),
+    systemPromptOverride: () => body,
+  });
+  await loader.reload();
+
+  const sessionDir = path.join(os.tmpdir(), "spawned_agents", mainSessionId, childAgentId);
+  await fs.mkdir(sessionDir, { recursive: true });
+
+  const { session: sub } = await createAgentSession({
+    cwd: agentCwd,
+    tools: toolNames,
+    customTools,
+    resourceLoader: loader,
+    sessionManager: SessionManager.create(agentCwd, sessionDir),
+  });
+
+  // ── Structured streaming via sub.subscribe() ──
+  if (onUpdate) {
+    wireToolStream(sub, onUpdate);
+  }
+
+  return sub;
 }
 
+/**
+ * Run a task on a child agent.
+ *
+ * When targeting an existing agent by ID the agent keeps its accumulated context.
+ * When no ID is given, or the target agent doesn't exist, a new agent is created.
+ * After completion the agent stays alive (idle) for future reuse.
+ */
 export async function runWorker(
   task: string,
   agentType: string,
-  parentId: string | null,
   mainSessionId: string,
   manager: AgentManager,
+  agentId?: string,
+  cwd?: string,
   onUpdate?: (entries: ToolLogEntry[]) => void,
 ): Promise<string> {
-  const childAgentId = `agent-${crypto.randomUUID()}`;
+  // Target an existing agent by ID, if given and it exists
+  if (agentId) {
+    const existing = manager.agents.get(agentId);
+    if (existing && existing.session) {
+      manager.markRunning(agentId, task);
 
-  // Register the agent early so it's tracked even if initialization fails
-  manager.register(childAgentId, parentId, agentType, task);
+      // ── Wire onUpdate to the existing session's event stream ──
+      if (onUpdate) {
+        wireToolStream(existing.session, onUpdate);
+      }
+
+      try {
+        await existing.session.prompt(task);
+        const result = extractResult(existing.session.agent.state);
+        manager.markDone(agentId, result);
+        return result;
+      } catch (error) {
+        manager.markDone(agentId, "failed");
+        throw error;
+      }
+    }
+  }
+
+  // No target ID given (or target doesn't exist) — create a new agent
+  const childAgentId = `agent-${crypto.randomUUID()}`;
+  manager.register(childAgentId, agentType, task, cwd);
 
   let result = "Task failed or was aborted.";
   try {
-    const contextPath = await findAgentFile(agentType);
+    const sub = await createChildSession(agentType, mainSessionId, childAgentId, cwd, onUpdate);
 
-    let rawContent = "You are a helpful background agent.";
-    if (contextPath) {
-      try {
-        rawContent = await fs.readFile(contextPath, "utf-8");
-      } catch {
-        // Falls back to default
-      }
-    }
-
-    const { body, tools } = parseAgentFile(rawContent);
-
-    // Build custom tools for the child session.
-    // - check_agent_statuses is always injected (read-only introspection, useful to all agents).
-    // - delegate_task is only injected when the agent file explicitly opts in via frontmatter.
-    const allChildTools = createAgentTools(childAgentId);
-    const statusTool = allChildTools.find((t) => t.name === "check_agent_statuses")!;
-    const delegateTool = tools?.includes("delegate_task")
-      ? allChildTools.find((t) => t.name === "delegate_task")
-      : undefined;
-
-    const toolNames = [...(tools ?? ["read", "bash", "edit", "write"])];
-    if (!toolNames.includes("check_agent_statuses")) {
-      toolNames.push("check_agent_statuses");
-    }
-
-    const customTools = delegateTool ? [statusTool, delegateTool] : [statusTool];
-
-    const loader = new DefaultResourceLoader({
-      cwd: process.cwd(),
-      agentDir: getAgentDir(),
-      systemPromptOverride: () => body,
-    });
-    await loader.reload();
-
-    const sessionDir = path.join(os.tmpdir(), "spawned_agents", mainSessionId, childAgentId);
-    await fs.mkdir(sessionDir, { recursive: true });
-
-    const { session: sub } = await createAgentSession({
-      tools: toolNames,
-      customTools,
-      resourceLoader: loader,
-      sessionManager: SessionManager.create(process.cwd(), sessionDir),
-    });
-
-    // Update the agent record with the session reference for abort support
-    const agentRecord = manager.agents.get(childAgentId);
-    if (agentRecord) {
-      agentRecord.session = sub;
-    }
-
-    // ── Structured streaming via sub.subscribe() ──
-    if (onUpdate) {
-      /** Ordered log: {label, status}. Replaced in-place when tools finish. */
-      const toolLog: ToolLogEntry[] = [];
-
-      /**
-       * Build a label from tool name + most descriptive arg.
-       * Generic: picks the first short string argument — works for any tool.
-       */
-      const toolLabel = (name: string, args: Record<string, unknown> | undefined): string => {
-        if (!args) return name;
-        for (const v of Object.values(args)) {
-          // Short string (path, command, query, pattern, url)
-          if (typeof v === "string" && v.length > 0 && v.length < 200) {
-            const preview = v.length > 40 ? v.slice(0, 40) + "…" : v;
-            return `${name} ${preview}`;
-          }
-          // String array (queries, urls) — use first element
-          if (Array.isArray(v) && v.length > 0 && typeof v[0] === "string") {
-            const preview = v[0].length > 40 ? v[0].slice(0, 40) + "…" : v[0];
-            return `${name} ${preview}`;
-          }
-        }
-        return name;
-      };
-
-      const emit = () => onUpdate([...toolLog]);
-
-      sub.subscribe((event: AgentSessionEvent) => {
-        switch (event.type) {
-          case "message_update": {
-            if (event.assistantMessageEvent?.type === "text_delta") {
-              emit();
-            }
-            break;
-          }
-
-          case "tool_execution_start": {
-            const label = toolLabel(event.toolName, event.args);
-            toolLog.push({ label, status: "running" });
-            emit();
-            break;
-          }
-
-          case "tool_execution_end": {
-            const name = event.toolName;
-            const ok = !event.isError;
-            // Replace the last "running" entry for this tool name (robust pairing)
-            for (let i = toolLog.length - 1; i >= 0; i--) {
-              const entry = toolLog[i];
-              if (entry && entry.label.startsWith(`${name} `) && entry.status === "running") {
-                toolLog[i] = {
-                  ...entry,
-                  status: ok ? "done" : "error",
-                };
-                break;
-              }
-            }
-            emit();
-            break;
-          }
-        }
-      });
-    }
+    const record = manager.agents.get(childAgentId);
+    if (record) record.session = sub;
 
     await sub.prompt(task);
     result = extractResult(sub.agent.state);
@@ -222,4 +224,40 @@ export async function runWorker(
   } finally {
     manager.markDone(childAgentId, result);
   }
+}
+
+/**
+ * Fire-and-forget async wrapper around runWorker.
+ * On completion, routes the notification to the caller via manager.notifyAgent.
+ * - Caller is "main" → pi.sendUserMessage (via mainNotify)
+ * - Caller is a headless agent → stored on that agent's record (visible via list_agents)
+ * Never throws.
+ */
+export function runWorkerAsync(
+  task: string,
+  agentType: string,
+  mainSessionId: string,
+  manager: AgentManager,
+  callerId: string,
+  agentId?: string,
+  cwd?: string,
+  onUpdate?: (entries: ToolLogEntry[]) => void,
+): void {
+  void (async () => {
+    try {
+      const result = await runWorker(
+        task,
+        agentType,
+        mainSessionId,
+        manager,
+        agentId,
+        cwd,
+        onUpdate,
+      );
+      await manager.notifyAgent(callerId, `✅ ${agentType} done: ${truncate(result, 280)}`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      await manager.notifyAgent(callerId, `❌ ${agentType} failed: ${truncate(message, 280)}`);
+    }
+  })();
 }

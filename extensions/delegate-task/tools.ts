@@ -4,55 +4,92 @@ import { Type } from "typebox";
 import { runWorker, runWorkerAsync, type ToolLogEntry } from "./run-worker";
 import { Text } from "@earendil-works/pi-tui";
 
-/** Defines delegate_task and check_agent_statuses tools. See docs/delegate-task.md. */
+/** Defines delegate_task and list_agents tools. */
 
-export function createAgentTools(
-  currentAgentId: string,
-  followUp?: (text: string) => Promise<void>,
-) {
+export function createAgentTools(currentAgentId: string) {
   const delegateTool = defineTool({
     name: "delegate_task",
     label: "Delegate Task",
-    description:
-      "Delegate a sub-task to a specialized background agent. Use 'sync' to pause your own work and wait for the result.",
+    description: [
+      "Delegate a sub-task to a background agent (sync or async).",
+      "",
+      "sync — blocks, returns result directly. async — fires; result arrives as a",
+      "  follow-up message automatically (no need to poll list_agents).",
+      "",
+      "agentId controls lifecycle:",
+      "  Omit → spawn fresh agent (default). Use for new topics.",
+      "  Provide → reuse existing idle agent by ID. Only when continuing its prior work.",
+      "  Multiple agents of the same type on different topics is expected.",
+      "  If unsure, spawn fresh. Extra agents are cheap; polluted context is expensive.",
+      "",
+      "agentType: role, maps to .pi/agents/{type}.md. Call list_agents to discover available types and IDs.",
+      "cwd: optional working directory for the child agent's tools.",
+      "task: include ALL context — the agent has its own isolated session.",
+    ].join("\n"),
+    promptSnippet: "Delegate sub-tasks to specialized background agents (sync/async, reusable).",
+    promptGuidelines: [
+      "Use delegate_task to offload work to a background agent while you focus on higher-level coordination.",
+      "Prefer sync unless the task is truly independent and non-blocking.",
+      "Spawn fresh (omit agentId) for new topics. Reuse by agentId only when continuing prior work.",
+      "Include full file paths, code snippets, and specific goals in the task string.",
+      "For async tasks the result arrives as a follow-up message automatically. Do not poll.",
+      "Set cwd to make the agent operate in a different directory.",
+    ],
     parameters: Type.Object({
       agentType: Type.String({
-        description: "The role of the agent to delegate to (e.g., 'researcher', 'coder').",
+        description: [
+          "Role, e.g. researcher, coder, reviewer.",
+          "Maps to .pi/agents/{type}.md. Call list_agents to discover available types.",
+          "Multiple agents can share a role on different topics.",
+        ].join(" "),
       }),
       task: Type.String({
-        description:
-          "Detailed, self-contained instructions. The background agent has no memory of your current conversation, so you MUST include all necessary context, file paths, and specific goals.",
+        description: [
+          "Self-contained instructions. The agent has its own isolated session",
+          "and does NOT see your conversation. Include all relevant context:",
+          "file paths, code snippets, error messages, goals.",
+        ].join(" "),
       }),
-      mode: Type.Union([Type.Literal("sync"), Type.Literal("async")]),
+      mode: Type.Union([Type.Literal("sync"), Type.Literal("async")], {
+        description: [
+          "sync: blocks and returns the result directly.",
+          "async: fire-and-forget. If you are the main session, the result",
+          "arrives as a follow-up message — do not poll list_agents.",
+        ].join(" "),
+      }),
+      agentId: Type.Optional(
+        Type.String({
+          description: [
+            "Reuse an existing idle agent by ID (get from list_agents).",
+            "Only reuse when continuing prior work. Omit to spawn fresh.",
+          ].join(" "),
+        }),
+      ),
+      cwd: Type.Optional(
+        Type.String({
+          description: [
+            "Working directory for the child agent.",
+            "Tools (read, bash, edit, write) resolve relative to this path.",
+            "Defaults to current directory.",
+          ].join(" "),
+        }),
+      ),
     }),
-    execute: async (id, params, signal, onUpdate, ctx) => {
-      // Validate depth early
-      const parentDepth = agentManager.agents.get(currentAgentId)?.depth || 0;
-      if (parentDepth >= 5) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: "Error: Maximum delegation depth of 5 reached. Cannot delegate further.",
-            },
-          ],
-          details: { agentType: params.agentType, tools: [] as ToolLogEntry[] },
-        };
-      }
+    execute: async (_callId, params, _signal, onUpdate, ctx) => {
+      const mainSessionId = ctx.sessionManager.getSessionId();
 
       if (params.mode === "sync") {
-        const mainSessionId = ctx.sessionManager.getSessionId();
         let tools: ToolLogEntry[] = [];
         const result = await runWorker(
           params.task,
           params.agentType,
-          currentAgentId,
           mainSessionId,
           agentManager,
+          params.agentId,
+          params.cwd,
           (entries) => {
             tools = entries;
             if (onUpdate) {
-              // Summary in content (plain-text fallback) + structured in details (colored renderResult)
               const summary =
                 entries.length === 0
                   ? `[${params.agentType}] Starting…`
@@ -74,32 +111,21 @@ export function createAgentTools(
           details: { agentType: params.agentType, tools },
         };
       } else {
-        // Async mode: fire-and-forget
-        if (!followUp) {
-          return {
-            content: [
-              {
-                type: "text",
-                text: "Error: async mode requires a followUp callback (not available in nested agents).",
-              },
-            ],
-            details: { agentType: params.agentType, tools: [] as ToolLogEntry[] },
-          };
-        }
-        const mainSessionId = ctx.sessionManager.getSessionId();
         runWorkerAsync(
           params.task,
           params.agentType,
-          currentAgentId,
           mainSessionId,
           agentManager,
-          followUp,
+          currentAgentId,
+          params.agentId,
+          params.cwd,
         );
+        const target = params.agentId ? ` (${params.agentId})` : "";
         return {
           content: [
             {
               type: "text",
-              text: `Background task delegated to ${params.agentType}. You will be notified when it completes.`,
+              text: `Background task delegated to ${params.agentType}${target}. The result will arrive as a follow-up message automatically — no need to poll list_agents.`,
             },
           ],
           details: { agentType: params.agentType, tools: [] as ToolLogEntry[] },
@@ -107,27 +133,25 @@ export function createAgentTools(
       }
     },
     renderCall: (args, theme) => {
-      const {
-        agentType = "?",
-        task = "",
-        mode = "sync",
-      } = args as { agentType?: string; task?: string; mode?: string };
+      const safe = (args ?? {}) as Record<string, unknown>;
+      const agentType = typeof safe.agentType === "string" ? safe.agentType : "?";
+      const task = typeof safe.task === "string" ? safe.task : "";
+      const mode = typeof safe.mode === "string" ? safe.mode : "sync";
+      const agentId = typeof safe.agentId === "string" ? safe.agentId : undefined;
       const preview = task.length > 60 ? task.slice(0, 60) + "…" : task;
+      const reuse = agentId ? ` → ${agentId}` : "";
 
       let text =
         theme.fg("toolTitle", theme.bold("delegate ")) +
         theme.fg("accent", agentType) +
-        theme.fg("muted", ` [${mode}]`);
-      if (preview) {
-        text += "\n  " + theme.fg("dim", preview);
-      }
+        theme.fg("muted", ` [${mode}]${reuse}`);
+      if (preview) text += "\n  " + theme.fg("dim", preview);
       return new Text(text, 0, 0);
     },
     renderResult: (result, options, theme) => {
       const details = result.details as { tools?: ToolLogEntry[]; agentType?: string } | undefined;
       const toolLog: ToolLogEntry[] = details?.tools || [];
 
-      // Format a single tool entry with theme-colored status icon
       const formatEntry = (e: ToolLogEntry): string => {
         const icon =
           e.status === "done"
@@ -138,7 +162,6 @@ export function createAgentTools(
         return theme.fg("dim", e.label) + " " + icon;
       };
 
-      // During streaming: show agent type header + each tool on its own line
       if (options.isPartial) {
         if (toolLog.length === 0) {
           const fallback =
@@ -152,7 +175,6 @@ export function createAgentTools(
         return new Text(header + "\n" + toolLog.map(formatEntry).join("\n"), 0, 0);
       }
 
-      // Final result: agent summary + first line of output
       const agentType = details?.agentType || "agent";
       const output = result.content[0]?.type === "text" ? result.content[0].text : "";
       const firstLine = output.split("\n")[0]?.trim() || "";
@@ -168,22 +190,32 @@ export function createAgentTools(
         theme.fg("toolTitle", theme.bold(agentType)) +
         theme.fg("muted", " done") +
         toolSummary;
-      if (preview) {
-        display += "\n  " + theme.fg("dim", preview);
-      }
+      if (preview) display += "\n  " + theme.fg("dim", preview);
       return new Text(display, 0, 0);
     },
   });
 
   const statusTool = defineTool({
-    name: "check_agent_statuses",
-    label: "Check Agent Statuses",
-    description:
-      "Check the status of all delegated background agents. Use this to see what the team is currently doing to avoid duplicating tasks.",
+    name: "list_agents",
+    label: "List Agents",
+    description: [
+      "List agents with status (RUNNING/IDLE), type, and ID.",
+      "Also lists available agent types you can use with delegate_task.",
+      "Use returned IDs as agentId in delegate_task to reuse an agent.",
+    ].join(" "),
+    promptSnippet: "List running agents and discover available agent types for delegate_task.",
+    promptGuidelines: [
+      "Call list_agents before your first delegate_task to discover available agent types and IDs.",
+      "Do not call list_agents repeatedly between steps — you already know the IDs and types.",
+      "For async tasks the result arrives as a follow-up message. Do not poll list_agents.",
+      "Only check list_agents after async if a headless agent is waiting for results.",
+      "Idle agents retain accumulated context — only reuse when continuing prior work.",
+      "Available agent types are listed under AVAILABLE TYPES — use them as agentType in delegate_task.",
+    ],
     parameters: Type.Object({}),
     execute: async () => {
       return {
-        content: [{ type: "text", text: agentManager.getAgentStatuses(currentAgentId) }],
+        content: [{ type: "text", text: await agentManager.getAgentStatuses(currentAgentId) }],
         details: {},
       };
     },

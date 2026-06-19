@@ -1,9 +1,10 @@
 # pi-setup
 
-Personal [pi](https://github.com/earendil-works/pi-coding-agent) configuration package with two extensions: an interactive TUI question tool and a desktop/terminal notification system.
+Personal [pi](https://github.com/earendil-works/pi-coding-agent) configuration package with three extensions: agent delegation, an interactive TUI question tool, and a desktop/terminal notification system.
 
 ## Extensions
 
+- **[delegate-task](docs/delegate-task.md)** — Spawn background child agents with sync/async modes, `list_agents` discovery, and idle-agent reuse
 - **[ask_user_question](docs/ask-user-question.md)** — TUI tool for structured multiple-choice prompts with write-in
 - **[notify](docs/notify.md)** — Desktop & terminal notifications when the agent is idle and waiting for input
 
@@ -11,13 +12,23 @@ Personal [pi](https://github.com/earendil-works/pi-coding-agent) configuration p
 
 ```
 ├── extensions/
-│   ├── ask-user-question.ts     # TUI question tool extension
-│   └── notify.ts                # Notification extension
+│   ├── ask-user-question.ts         # TUI question tool extension
+│   ├── delegate-task/
+│   │   ├── index.ts                 # Extension entry — wires tools onto pi
+│   │   ├── tools.ts                 # defineTool definitions with renderCall/renderResult
+│   │   ├── run-worker.ts            # Spawns/targets child AgentSession instances
+│   │   └── agent-manager.ts         # Flat agent pool, lifecycle, cleanup hooks
+│   └── notify.ts                    # Notification extension
 ├── docs/
-│   ├── ask-user-question.md     # Ask tool documentation
-│   └── notify.md                # Notify extension documentation
+│   ├── ask-user-question.md         # Ask tool documentation
+│   ├── delegate-task.md             # Delegate-task extension documentation
+│   ├── notify.md                    # Notify extension documentation
+│   └── spec/
+│       ├── agent-spec.md            # Original swarm-agent specification
+│       └── agent-implementation-plan.md
 ├── tests/
 │   ├── ask-user-question.test.ts
+│   ├── delegate-task/               # Delegate-task tests
 │   └── notify.test.ts
 ├── package.json
 ├── tsconfig.json
@@ -31,7 +42,7 @@ Install as a pi package from this repo, or clone and register locally. The `pack
 ```json
 {
   "pi": {
-    "extensions": ["./extensions"]
+    "extensions": ["./extensions/*"]
   }
 }
 ```
