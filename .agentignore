@@ -3,8 +3,6 @@
 # Format: gitignore syntax (# comments, ! negation, glob patterns)
 # These add extra protection beyond the always-blocked .git/ and .pi/
 
-# Dependencies — managed by package manager, never edit directly
-node_modules/
 
 # Lockfiles — let the tooling manage these
 package-lock.json
