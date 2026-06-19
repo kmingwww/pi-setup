@@ -30,9 +30,9 @@ describe("isDangerousCommand", () => {
       expect(isDangerousCommand("chown -R user:group /home")).toBe(true);
     });
 
-    it("detects redirect to device files", () => {
-      expect(isDangerousCommand('echo "hello" > /dev/null')).toBe(true);
+    it("detects redirect to block device files", () => {
       expect(isDangerousCommand("cat file > /dev/sda")).toBe(true);
+      expect(isDangerousCommand("cat file > /dev/nvme0n1")).toBe(true);
     });
 
     it("detects mkfs (filesystem formatting)", () => {
@@ -86,6 +86,20 @@ describe("isDangerousCommand", () => {
 
     it("does not flag rmr (non-standard command)", () => {
       expect(isDangerousCommand("rmr -rf /tmp")).toBe(false);
+    });
+
+    it("does not flag redirect to safe pseudo-devices", () => {
+      expect(isDangerousCommand('echo "hello" > /dev/null')).toBe(false);
+      expect(isDangerousCommand("echo 'hello' 2>/dev/null")).toBe(false);
+      expect(isDangerousCommand("cmd >/dev/null 2>&1")).toBe(false);
+      expect(isDangerousCommand("> /dev/zero")).toBe(false);
+      expect(isDangerousCommand("> /dev/random")).toBe(false);
+      expect(isDangerousCommand("> /dev/urandom")).toBe(false);
+      expect(isDangerousCommand("> /dev/full")).toBe(false);
+      expect(isDangerousCommand("> /dev/stderr")).toBe(false);
+      expect(isDangerousCommand("> /dev/stdout")).toBe(false);
+      expect(isDangerousCommand("> /dev/stdin")).toBe(false);
+      expect(isDangerousCommand("> /dev/fd/3")).toBe(false);
     });
   });
 

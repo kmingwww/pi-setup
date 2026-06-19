@@ -19,8 +19,9 @@ export const DANGEROUS_PATTERNS: RegExp[] = [
   /\bchmod\b.*777/i,
   // chown
   /\bchown\b/i,
-  // redirect to /dev/ files
-  />\s*\/dev\//i,
+  // redirect to /dev/ files (exclude safe pseudo-devices: null, zero, random,
+  // urandom, full, stderr, stdout, stdin, fd/)
+  />\s*\/dev\/(?!null\b|zero\b|random\b|urandom\b|full\b|stderr\b|stdout\b|stdin\b|fd\/)/i,
   // mkfs (filesystem creation)
   /\bmkfs\b/i,
   // dd with if= (disk imaging)
