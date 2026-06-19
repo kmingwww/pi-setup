@@ -23,6 +23,8 @@ interface MockPi {
   on: ReturnType<typeof vi.fn>;
   handlers: Record<string, Function[]>;
   events: { on: ReturnType<typeof vi.fn>; emit: ReturnType<typeof vi.fn> };
+  appendEntry: ReturnType<typeof vi.fn>;
+  sessionManager: { getEntries: ReturnType<typeof vi.fn> };
 }
 
 function createMockPi(): MockPi {
@@ -36,6 +38,10 @@ function createMockPi(): MockPi {
     events: {
       on: vi.fn(),
       emit: vi.fn(),
+    },
+    appendEntry: vi.fn(),
+    sessionManager: {
+      getEntries: vi.fn(() => []),
     },
   };
 }
@@ -103,9 +109,9 @@ describe("guardrail extension registration", () => {
     const pi = createMockPi();
     factory(pi as any);
 
-    expect(pi.on).toHaveBeenCalledTimes(2);
+    expect(pi.on).toHaveBeenCalledTimes(4);
     expect(pi.on).toHaveBeenCalledWith("tool_call", expect.any(Function));
-    expect(pi.handlers["tool_call"]).toHaveLength(2);
+    expect(pi.handlers["tool_call"]).toHaveLength(3);
   });
 });
 
@@ -127,8 +133,8 @@ describe("bash guardrail", () => {
   async function getBashHandler(): Promise<Function> {
     const pi = createMockPi();
     factory(pi as any);
-    // First handler is the bash guardrail
-    return pi.handlers["tool_call"]![0]!;
+    // Handler 1 is the bash guardrail (0=read, 1=bash, 2=path)
+    return pi.handlers["tool_call"]![1]!;
   }
 
   describe("dangerous commands", () => {
@@ -272,7 +278,7 @@ describe("bash guardrail", () => {
     async function getBashHandler(): Promise<Function> {
       const pi = createMockPi();
       factory(pi as any);
-      return pi.handlers["tool_call"]![0]!;
+      return pi.handlers["tool_call"]![1]!;
     }
 
     it("auto-blocks dangerous commands without prompting", async () => {
@@ -326,8 +332,8 @@ describe("path guardrail", () => {
   async function getPathHandler(): Promise<Function> {
     const pi = createMockPi();
     factory(pi as any);
-    // Second handler is the path guardrail
-    return pi.handlers["tool_call"]![1]!;
+    // Handler 2 is the path guardrail (0=read, 1=bash, 2=path)
+    return pi.handlers["tool_call"]![2]!;
   }
 
   describe("write tool", () => {
@@ -454,7 +460,7 @@ describe("path guardrail", () => {
 
       const pi = createMockPi();
       factory(pi as any);
-      const handler = pi.handlers["tool_call"]![1]!;
+      const handler = pi.handlers["tool_call"]![2]!; // 2 = path guardrail
       const ctx = tuiCtx();
 
       const event = {
@@ -480,7 +486,7 @@ describe("path guardrail", () => {
     async function getPathHandler(): Promise<Function> {
       const pi = createMockPi();
       factory(pi as any);
-      return pi.handlers["tool_call"]![1]!;
+      return pi.handlers["tool_call"]![2]!;
     }
 
     it("blocks protected paths in non-interactive mode", async () => {

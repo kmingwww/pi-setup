@@ -22,7 +22,7 @@ import {
   type AgentIgnorePatterns,
 } from "./agentignore";
 import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { resolve, dirname } from "node:path";
 
 // ---------------------------------------------------------------------------
 // Cached .agentignore patterns (keyed by cwd)
@@ -112,10 +112,100 @@ function commandTargetsProtectedPath(
 }
 
 // ---------------------------------------------------------------------------
+// Session-scoped allowlist (persisted via pi.appendEntry)
+// ---------------------------------------------------------------------------
+
+/** Resolve a path to absolute, normalizing if needed. */
+function resolvePath(raw: string, cwd: string): string {
+  try {
+    return resolve(cwd, raw);
+  } catch {
+    return raw;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Extension entry point
 // ---------------------------------------------------------------------------
 
 export default function (pi: ExtensionAPI) {
+  // Session-scoped allowlist: paths the user has explicitly allowed.
+  // Persisted via pi.appendEntry so decisions survive /reload.
+  const allowedPaths = new Set<string>();
+
+  /** Restore allowlist from previously persisted session entries. */
+  pi.on("session_start", async (_event, ctx) => {
+    allowedPaths.clear();
+    for (const entry of ctx.sessionManager.getEntries()) {
+      if (entry.type === "custom" && entry.customType === "guardrail-allowed-path") {
+        const p = (entry.data as { path?: string })?.path;
+        if (p) allowedPaths.add(p);
+      }
+    }
+  });
+
+  /** Persist an allowed path to memory and the session file. */
+  function allowPath(path: string) {
+    allowedPaths.add(path);
+    pi.appendEntry("guardrail-allowed-path", { path });
+  }
+
+  /**
+   * Check whether a resolved absolute path (or any parent directory) has been
+   * explicitly allowed by the user in this session.
+   */
+  function isPathAllowed(resolved: string): boolean {
+    if (allowedPaths.has(resolved)) return true;
+    let dir = resolved;
+    while (true) {
+      const parent = dirname(dir);
+      if (parent === dir) break;
+      dir = parent;
+      if (allowedPaths.has(dir)) return true;
+    }
+    return false;
+  }
+
+  // --- Read guardrail ---
+  pi.on("tool_call", async (event, ctx) => {
+    if (event.toolName !== "read") return;
+    const targetPath = (event.input as { path?: string }).path;
+    if (!targetPath) return;
+
+    const resolved = resolvePath(targetPath, ctx.cwd);
+
+    // 1. Check always-protected paths (.git/, .pi/)
+    const isAlwaysProtected = isProtectedPath(resolved, ctx.cwd);
+
+    // 2. Check .agentignore patterns
+    const patterns = getAgentIgnorePatterns(ctx.cwd);
+    const isAgentIgnoreProtected =
+      patterns != null && isProtectedByAgentIgnore(resolved, patterns, ctx.cwd);
+
+    if (!isAlwaysProtected && !isAgentIgnoreProtected) return;
+
+    // 3. Skip if already allowed this session
+    if (isPathAllowed(resolved)) return;
+
+    if (ctx.hasUI) {
+      pi.events.emit("user-input-needed", {
+        title: "Pi — Guardrail",
+        body: `Read protected path? — ${resolved.slice(-50)}`,
+      });
+
+      const choice = await ctx.ui.select(`🛡️  Protected path: ${resolved}\n\nAllow read?`, [
+        "Allow once",
+        "Block",
+      ]);
+      if (choice === "Block") {
+        return { block: true, reason: `Blocked read of protected path: ${resolved}` };
+      }
+      allowPath(resolved);
+    } else {
+      return { block: true, reason: `Blocked read of protected path (no UI): ${resolved}` };
+    }
+  });
+
   // --- Bash guardrail ---
   pi.on("tool_call", async (event, ctx) => {
     if (event.toolName !== "bash") return;
