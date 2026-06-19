@@ -143,6 +143,12 @@ export default function (pi: ExtensionAPI) {
         .filter(Boolean)
         .join("\n");
 
+      // Notify user via the extension event bus (picked up by notify.ts)
+      pi.events.emit("user-input-needed", {
+        title: "Pi — Guardrail",
+        body: `Block or Allow? — ${command.slice(0, 60)}`,
+      });
+
       const choice = await ctx.ui.select(details, ["Block", "Allow"]);
       if (choice === "Block") {
         return { block: true, reason: `Blocked by user: ${reason}` };

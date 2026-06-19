@@ -7,7 +7,9 @@ A pi extension that alerts you when the agent finishes a turn and is waiting for
 
 ## How it works
 
-The extension listens to the `agent_end` event (for normal turn completion) and the `tool_call` event (when the agent uses tools like `ask_user_question` to pause for input). It fires notifications through every available backend.
+The extension listens to the `agent_end` event (for normal turn completion), the `tool_call` event (when the agent uses `ask_user_question`), and a shared `user-input-needed` event on `pi.events` that any extension can emit. It fires notifications through every available backend.
+
+**Event-driven design:** Other extensions (like `guardrail`) can trigger notifications by emitting `pi.events.emit("user-input-needed", { title, body })`. The notify extension listens on the shared event bus and fires a desktop notification when the terminal is unfocused. This keeps extensions decoupled — no imports needed between them.
 
 Notifications only fire if **two conditions** are met:
 
@@ -107,6 +109,58 @@ The `agent_end` handler checks `ctx.mode !== "tui"` and returns early for:
 
 This prevents subagents, SDK integrations, and automated runs from spamming notifications.
 
+## API for other extensions
+
+Notify exposes a **single event contract** via `pi.events`. Any extension can trigger a
+desktop notification by emitting `"user-input-needed"` — no imports, no coupling.
+
+### Emitting a notification
+
+```typescript
+pi.events.emit("user-input-needed", {
+  title: "Pi — My Extension",
+  body: "Short description (≤72 chars recommended)",
+});
+```
+
+### Contract
+
+| Event name          | Payload                           | Behaviour                                                                                       |
+| ------------------- | --------------------------------- | ----------------------------------------------------------------------------------------------- |
+| `user-input-needed` | `{ title: string, body: string }` | Fires a desktop notification **if** the terminal is unfocused and in TUI mode. No-op otherwise. |
+
+Notify handles all the gates: TUI-mode check, focus tracking, probe completion,
+and deduplication (`hasNotifiedThisWait`). Emitters don't need to worry about
+any of that — just emit.
+
+### Built-in emitters
+
+| Emitter              | When                                                   |
+| -------------------- | ------------------------------------------------------ |
+| `input-bridge.ts`    | Agent calls `ask_user_question`                        |
+| `guardrail/index.ts` | Dangerous command detected, showing Block/Allow prompt |
+
+### Example: adding a custom emitter
+
+```typescript
+// your-extension.ts
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+
+export default function (pi: ExtensionAPI) {
+  // Trigger a notification when your tool needs user attention
+  pi.on("tool_call", async (event) => {
+    if (event.toolName === "my_interactive_tool") {
+      pi.events.emit("user-input-needed", {
+        title: "Pi — My Tool",
+        body: "Waiting for your input…",
+      });
+    }
+  });
+}
+```
+
+No import of notify needed. The event bus handles the rest.
+
 ## Installation
 
 The extension is auto-discovered from `extensions/notify.ts` via the project's `package.json`:
@@ -114,7 +168,7 @@ The extension is auto-discovered from `extensions/notify.ts` via the project's `
 ```json
 {
   "pi": {
-    "extensions": ["./extensions"]
+    "extensions": ["./extensions/*"]
   }
 }
 ```

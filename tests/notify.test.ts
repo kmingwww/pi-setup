@@ -24,13 +24,27 @@ function setExecFileImpl(fn: typeof ExecFileFn) {
 // ---------------------------------------------------------------------------
 
 /** Create a minimal mock ExtensionAPI and capture registered handlers. */
-function createMockPi(): { on: ReturnType<typeof vi.fn>; handlers: Record<string, Function> } {
+function createMockPi(): {
+  on: ReturnType<typeof vi.fn>;
+  handlers: Record<string, Function>;
+  events: { on: ReturnType<typeof vi.fn>; emit: ReturnType<typeof vi.fn> };
+} {
   const handlers: Record<string, Function> = {};
+  const eventListeners: Record<string, Function[]> = {};
   return {
     handlers,
     on: vi.fn((event: string, handler: Function) => {
       handlers[event] = handler;
     }),
+    events: {
+      on: vi.fn((event: string, handler: Function) => {
+        if (!eventListeners[event]) eventListeners[event] = [];
+        eventListeners[event].push(handler);
+      }),
+      emit: vi.fn((event: string, data: unknown) => {
+        for (const h of eventListeners[event] ?? []) h(data);
+      }),
+    },
   };
 }
 
@@ -196,13 +210,11 @@ describe("notify extension", () => {
       const factory = await loadNotify();
       await factory(pi as any);
 
-      expect(pi.on).toHaveBeenCalledTimes(6);
+      expect(pi.on).toHaveBeenCalledTimes(4);
       expect(pi.handlers.agent_end).toBeDefined();
       expect(pi.handlers.session_start).toBeDefined();
       expect(pi.handlers.session_shutdown).toBeDefined();
-      expect(pi.handlers.tool_call).toBeDefined();
       expect(pi.handlers.agent_start).toBeDefined();
-      expect(pi.handlers.tool_result).toBeDefined();
     });
   });
 
@@ -783,8 +795,8 @@ describe("notify extension", () => {
     });
   });
 
-  describe("tool_call", () => {
-    it("notifies when ask_user_question is called", async () => {
+  describe("user-input-needed event listener", () => {
+    it("fires notification when event is emitted and terminal is unfocused", async () => {
       delete process.env.WT_SESSION;
       delete process.env.KITTY_WINDOW_ID;
 
@@ -796,33 +808,31 @@ describe("notify extension", () => {
       simulateFocusOut();
       stdoutWrite.mockClear();
 
-      const event = {
-        toolName: "ask_user_question",
-        input: { question: "Are you sure?" },
-      };
-      await pi.handlers.tool_call!(event, tuiCtx());
+      pi.events.emit("user-input-needed", {
+        title: "Pi — Question",
+        body: 'Question: "Are you sure?"',
+      });
 
       expect(stdoutWrite).toHaveBeenCalledWith(
         expect.stringContaining(`\x1b]777;notify;Pi — Question;Question: "Are you sure?"\x07`),
       );
     });
 
-    it("ignores other tools", async () => {
+    it("does nothing when terminal is focused", async () => {
       const pi = createMockPi();
       const factory = await loadNotify();
       await factory(pi as any);
 
       await pi.handlers.session_start!(undefined, tuiCtx());
-      simulateFocusOut();
+      // No simulateFocusOut — terminal is focused
       stdoutWrite.mockClear();
 
-      const event = {
-        toolName: "bash",
-        input: { command: "ls" },
-      };
-      await pi.handlers.tool_call!(event, tuiCtx());
+      pi.events.emit("user-input-needed", {
+        title: "Pi — Test",
+        body: "Test body",
+      });
 
-      expect(stdoutWrite).not.toHaveBeenCalled();
+      expect(stdoutWrite).not.toHaveBeenCalledWith(expect.stringContaining("\x1b]777"));
     });
   });
 });

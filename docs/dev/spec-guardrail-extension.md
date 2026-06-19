@@ -166,6 +166,11 @@ async function handlePathGuardrail(
   - `pi.on("tool_call", …)` → block tool execution
   - `ctx.hasUI`, `ctx.mode` → detect interactive vs non-interactive
   - `ctx.ui.confirm()`, `ctx.ui.select()`, `ctx.ui.notify()` → user interaction
+  - `pi.events` → inter-extension event bus (see `docs/notify.md` for the `user-input-needed` contract)
+- This project's extensions:
+  - `notify.ts` — desktop notification listener driven by `pi.events` (see `docs/notify.md`)
+  - `input-bridge.ts` — bridges `ask_user_question` tool calls to `user-input-needed` events
+  - `guardrail/` — emits `user-input-needed` before showing Block/Allow prompts
 - Example extensions:
   - `permission-gate.ts` — dangerous bash command confirmation
   - `protected-paths.ts` — path-based write/edit blocking

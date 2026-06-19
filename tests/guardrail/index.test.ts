@@ -22,6 +22,7 @@ import factory, { clearAgentIgnoreCache } from "../../extensions/guardrail/index
 interface MockPi {
   on: ReturnType<typeof vi.fn>;
   handlers: Record<string, Function[]>;
+  events: { on: ReturnType<typeof vi.fn>; emit: ReturnType<typeof vi.fn> };
 }
 
 function createMockPi(): MockPi {
@@ -32,6 +33,10 @@ function createMockPi(): MockPi {
       if (!handlers[event]) handlers[event] = [];
       handlers[event].push(handler);
     }),
+    events: {
+      on: vi.fn(),
+      emit: vi.fn(),
+    },
   };
 }
 

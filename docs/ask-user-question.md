@@ -128,6 +128,13 @@ The write-in field is always visible. It's not a separate "mode" — it's render
 
 In print (`-p`), JSON, or RPC modes, the tool is **not registered** — the LLM won't see it in its available tools list. Only TUI mode registers it.
 
+## Desktop notifications
+
+When the agent calls `ask_user_question`, the `input-bridge.ts` extension emits a
+`"user-input-needed"` event on `pi.events`. The `notify.ts` extension listens for this
+event and fires a desktop notification if the terminal is unfocused. See
+[`docs/notify.md`](notify.md) for the event contract.
+
 ## Registration
 
 The tool registers in `session_start` only when `ctx.mode === "tui"`:

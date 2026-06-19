@@ -152,6 +152,7 @@ function notifyOSC99(title: string, body: string): void {
 export default function (pi: ExtensionAPI) {
   let isFocused = true; // Assume focused until terminal tells us otherwise
   let hasNotifiedThisWait = false;
+  let tuiActive = false; // True only during an active TUI session
 
   function triggerNotification(title: string, body: string) {
     if (hasNotifiedThisWait) return;
@@ -195,6 +196,7 @@ export default function (pi: ExtensionAPI) {
   pi.on("session_start", async (_event, ctx) => {
     if (ctx.mode !== "tui") return;
 
+    tuiActive = true;
     await ensureProbed();
 
     // Enable focus tracking and listen for events
@@ -214,6 +216,7 @@ export default function (pi: ExtensionAPI) {
   pi.on("session_shutdown", async (_event, ctx) => {
     if (ctx.mode !== "tui") return;
 
+    tuiActive = false;
     // Disable focus tracking and clean up listener
     process.stdout.write("\x1b[?1004l");
     process.stdin.removeListener("data", handleStdinData);
@@ -221,12 +224,6 @@ export default function (pi: ExtensionAPI) {
 
   pi.on("agent_start", async () => {
     hasNotifiedThisWait = false;
-  });
-
-  pi.on("tool_result", async (event) => {
-    if (event.toolName === "ask_user_question") {
-      hasNotifiedThisWait = false;
-    }
   });
 
   pi.on("agent_end", async (event, ctx) => {
@@ -239,20 +236,13 @@ export default function (pi: ExtensionAPI) {
     triggerNotification(title, body);
   });
 
-  pi.on("tool_call", async (event, ctx) => {
-    if (ctx.mode !== "tui" || isFocused || !probeComplete) return;
-    if (event.toolName === "ask_user_question") {
-      const title = "Pi — Question";
-      const q = event.input.question;
-      const questionStr = typeof q === "string" ? q : "Waiting for user input...";
-      const maxLen = 72;
-      const truncated =
-        questionStr.length > maxLen
-          ? questionStr.slice(0, maxLen - 3).trimEnd() + "…"
-          : questionStr;
-      const body = `Question: "${truncated}"`;
-
-      triggerNotification(title, body);
-    }
+  // Shared event listener: any extension can emit "user-input-needed" to
+  // fire a desktop notification when the user is away from the terminal.
+  // (input-bridge.ts emits for ask_user_question; guardrail emits for
+  // Block/Allow prompts; add your own emitters the same way.)
+  pi.events.on("user-input-needed", (data) => {
+    if (!tuiActive || isFocused || !probeComplete) return;
+    const { title, body } = data as { title: string; body: string };
+    triggerNotification(title, body);
   });
 }
