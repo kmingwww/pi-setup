@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   extractResult,
   runWorker,
@@ -75,6 +75,10 @@ describe("runWorker", () => {
     await setupSessionMock();
   });
 
+  afterEach(() => {
+    manager.destroy();
+  });
+
   it("spawns a child agent, runs task, and returns result", async () => {
     const mainSessionId = "main-session-123";
     const result = await runWorker("do some research", "researcher", mainSessionId, manager);
@@ -82,7 +86,7 @@ describe("runWorker", () => {
     expect(result).toBe("Final result text");
     expect(manager.getActiveCount()).toBe(0);
 
-    const status = manager.getAgentStatuses();
+    const status = await manager.getAgentStatuses();
     expect(status).toContain("[IDLE] researcher");
   });
 
@@ -221,6 +225,10 @@ describe("runWorkerAsync", () => {
     await setupSessionMock();
   });
 
+  afterEach(() => {
+    manager.destroy();
+  });
+
   it("routes success to mainNotify when caller is main", async () => {
     manager.mainNotify = vi.fn().mockResolvedValue(undefined);
 
@@ -325,7 +333,7 @@ describe("runWorkerAsync", () => {
     await notifyCalled;
 
     expect(manager.getActiveCount()).toBe(0);
-    const status = manager.getAgentStatuses();
+    const status = await manager.getAgentStatuses();
     expect(status).toContain("[IDLE] researcher");
   });
 

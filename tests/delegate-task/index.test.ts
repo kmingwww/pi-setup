@@ -7,6 +7,7 @@ describe("delegate-task", () => {
   it("registers delegate_task and list_agents tools and wires mainNotify", async () => {
     const mockPi = {
       registerTool: vi.fn(),
+      registerCommand: vi.fn(),
       sendUserMessage: vi.fn().mockResolvedValue(undefined),
     };
 

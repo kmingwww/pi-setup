@@ -1,0 +1,30 @@
+# .agentignore — paths the agent must never write to or edit
+#
+# Format: gitignore syntax (# comments, ! negation, glob patterns)
+# These add extra protection beyond the always-blocked .git/ and .pi/
+
+# Dependencies — managed by package manager, never edit directly
+node_modules/
+
+# Lockfiles — let the tooling manage these
+package-lock.json
+skills-lock.json
+
+# Environment & secrets — never touch these
+.env
+.env.*
+!.env.example
+
+# Keys, certificates, credentials
+*.pem
+*.key
+*.p12
+*.pfx
+credentials/
+secrets/
+
+# Git hooks — don't tamper with them
+.githooks/
+
+# Self-protection — don't let the agent weaken its own guardrails
+.agentignore

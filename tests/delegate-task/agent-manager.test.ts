@@ -14,7 +14,13 @@ describe("AgentManager", () => {
   let manager: AgentManager;
 
   beforeEach(() => {
+    vi.spyOn(os, "homedir").mockReturnValue("/home/user");
+    vi.spyOn(fs, "readdir").mockResolvedValue([]);
     manager = new AgentManager();
+  });
+
+  afterEach(() => {
+    manager.destroy();
   });
 
   it("aborts all running sessions on abortAll", async () => {
@@ -95,13 +101,13 @@ describe("AgentManager", () => {
     expect(manager.agents.size).toBe(0);
   });
 
-  it("formats the team status as a flat list", () => {
+  it("formats the team status as a flat list", async () => {
     manager.register("id-1", "manager", "coordinate team");
     manager.register("id-2", "researcher", "find docs");
     manager.markDone("id-2", "docs found");
 
-    const status = manager.getAgentStatuses();
-    expect(status).toContain("AVAILABLE AGENTS:");
+    const status = await manager.getAgentStatuses();
+    expect(status).toContain("RUNNING AGENTS:");
     expect(status).toContain("- [RUNNING] manager (id-1)");
     expect(status).toContain("Task: coordinate team");
     expect(status).toContain("- [IDLE] researcher (id-2)");
@@ -126,11 +132,11 @@ describe("AgentManager", () => {
     expect(agent.notifications).toEqual(["result done"]);
   });
 
-  it("getAgentStatuses shows and drains notifications for the caller", () => {
+  it("getAgentStatuses shows and drains notifications for the caller", async () => {
     manager.register("agent-1", "researcher", "task");
     manager.agents.get("agent-1")!.notifications.push("✅ researcher done: found docs");
 
-    const status = manager.getAgentStatuses("agent-1");
+    const status = await manager.getAgentStatuses("agent-1");
     expect(status).toContain("PENDING RESULTS FROM DELEGATED TASKS:");
     expect(status).toContain("✅ researcher done: found docs");
 
@@ -138,12 +144,12 @@ describe("AgentManager", () => {
     expect(manager.agents.get("agent-1")!.notifications).toEqual([]);
   });
 
-  it("getAgentStatuses does not drain notifications for non-caller agents", () => {
+  it("getAgentStatuses does not drain notifications for non-caller agents", async () => {
     manager.register("agent-1", "researcher", "task");
     manager.register("agent-2", "coder", "task");
     manager.agents.get("agent-1")!.notifications.push("secret");
 
-    const status = manager.getAgentStatuses("agent-2");
+    const status = await manager.getAgentStatuses("agent-2");
     expect(status).not.toContain("PENDING RESULTS");
     expect(manager.agents.get("agent-1")!.notifications).toEqual(["secret"]);
   });

@@ -136,7 +136,7 @@ describe("createAgentTools", () => {
       {} as unknown as ExtensionContext,
     );
 
-    const expectedStatus = agentManager.getAgentStatuses();
+    const expectedStatus = await agentManager.getAgentStatuses();
     expect(result).toEqual({ content: [{ type: "text", text: expectedStatus }], details: {} });
   });
 
@@ -164,7 +164,7 @@ describe("createAgentTools", () => {
       expect(result.text).not.toContain("→");
     });
 
-    it("uses consistent short-form (8 chars) for agentId in renderCall output", () => {
+    it("shows full agentId in renderCall output", () => {
       const tools = createAgentTools("main");
       const delegateTool = tools.find((t) => t.name === "delegate_task");
 
@@ -179,19 +179,13 @@ describe("createAgentTools", () => {
       const arrowMatch = result.text.match(/→\s+(\S+)/);
       expect(arrowMatch).not.toBeNull();
       const shownId = arrowMatch![1]!;
-      // Must be exactly 8 chars
-      expect(shownId.length).toBe(8);
-      expect(shownId).toBe(longId.slice(0, 8));
+      // Should show the full agentId, not truncated
+      expect(shownId).toBe(longId);
     });
   });
 
   describe("list_agents output", () => {
-    const mockTheme = {
-      fg: (_color: string, text: string) => text,
-      bold: (text: string) => text,
-    };
-
-    it("uses consistent short-form (8 chars) for agent IDs in status output", async () => {
+    it("shows full agent IDs in status output", async () => {
       const longId = "agent-550e8400-e29b-41d4-a716-446655440000";
       agentManager.register(longId, "researcher", "find docs");
 
@@ -211,9 +205,8 @@ describe("createAgentTools", () => {
       const match = text.match(/researcher\s+\(([^)]+)\)/);
       expect(match).not.toBeNull();
       const shownId = match![1]!;
-      // Must be exactly 8 chars
-      expect(shownId.length).toBe(8);
-      expect(shownId).toBe(longId.slice(0, 8));
+      // Should show the full agentId, not truncated
+      expect(shownId).toBe(longId);
     });
   });
 

@@ -1,6 +1,6 @@
 #!/bin/sh
 
-echo "🔍 Running Prettier and ESLint..."
+echo "🔍 Running Prettier, ESLint, and tests..."
 
 # Run formatting and linting
 npm run format
@@ -11,6 +11,17 @@ LINT_CODE=$?
 
 if [ $LINT_CODE -ne 0 ]; then
   echo "❌ Linting failed! Please fix the errors before committing."
+  exit 1
+fi
+
+# Run tests
+npm run test
+
+# Capture the exit code of test
+TEST_CODE=$?
+
+if [ $TEST_CODE -ne 0 ]; then
+  echo "❌ Tests failed! Please fix the errors before committing."
   exit 1
 fi
 

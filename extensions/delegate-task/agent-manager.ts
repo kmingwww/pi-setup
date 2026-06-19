@@ -30,6 +30,8 @@ export class AgentManager {
   /** Set by index.ts — wraps pi.sendUserMessage for async completion alerts. */
   public mainNotify?: (msg: string) => Promise<void>;
 
+  private _cleanup?: () => void;
+
   constructor() {
     this.setupCleanupHooks();
   }
@@ -167,11 +169,22 @@ export class AgentManager {
     const cleanup = () => {
       this.abortAll();
     };
+    this._cleanup = cleanup;
 
     if (typeof process !== "undefined") {
       process.on("SIGINT", cleanup);
       process.on("SIGTERM", cleanup);
       process.on("exit", cleanup);
+    }
+  }
+
+  /** Remove process event listeners. Call in test cleanup or when discarding. */
+  destroy(): void {
+    if (this._cleanup && typeof process !== "undefined") {
+      process.off("SIGINT", this._cleanup);
+      process.off("SIGTERM", this._cleanup);
+      process.off("exit", this._cleanup);
+      this._cleanup = undefined;
     }
   }
 }
