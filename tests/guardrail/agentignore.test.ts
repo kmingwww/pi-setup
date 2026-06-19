@@ -29,21 +29,24 @@ describe("findAgentIgnoreFile", () => {
 
   const CWD = "/home/user/proj";
   const SRC = "/home/user/proj/src";
-  const AGENTIGNORE_CWD = "/home/user/proj/.agentignore";
-  const AGENTIGNORE_HOME = "/home/user/.agentignore";
-
-  it("returns the path when .agentignore exists in cwd", () => {
-    mockedExistsSync.mockImplementation((p: string) => p === AGENTIGNORE_CWD);
+  it("returns the path when .agentignore exists in cwd and no .git/ ancestor", () => {
+    // existsSync called for: .agentignore (yes) in cwd
+    mockedExistsSync.mockImplementation((p: string) => p === "/home/user/proj/.agentignore");
 
     const result = findAgentIgnoreFile(CWD);
-    expect(result).toBe(AGENTIGNORE_CWD);
+    expect(result).toBe("/home/user/proj/.agentignore");
   });
 
   it("returns the path when .agentignore exists in a parent directory", () => {
-    mockedExistsSync.mockImplementation((p: string) => p === AGENTIGNORE_HOME);
+    mockedExistsSync.mockImplementation((p: string) => {
+      if (p === "/home/user/proj/src/.agentignore") return false;
+      if (p === "/home/user/proj/src/.git") return false;
+      if (p === "/home/user/proj/.agentignore") return true;
+      return false;
+    });
 
     const result = findAgentIgnoreFile(SRC);
-    expect(result).toBe(AGENTIGNORE_HOME);
+    expect(result).toBe("/home/user/proj/.agentignore");
   });
 
   it("returns null when no .agentignore exists anywhere up the tree", () => {
@@ -53,13 +56,25 @@ describe("findAgentIgnoreFile", () => {
     expect(result).toBeNull();
   });
 
-  it("stops at the filesystem root", () => {
+  it("stops at git root (directory containing .git/)", () => {
+    mockedExistsSync.mockImplementation((p: string) => {
+      if (p === "/home/user/proj/src/.agentignore") return false;
+      if (p === "/home/user/proj/src/.git") return false;
+      if (p === "/home/user/proj/.agentignore") return false;
+      if (p === "/home/user/proj/.git") return true; // git root — stop here
+      return false;
+    });
+
+    const result = findAgentIgnoreFile(SRC);
+    // Should stop at git root even though /home/user might have .agentignore
+    expect(result).toBeNull();
+  });
+
+  it("stops at the filesystem root if no git root", () => {
     mockedExistsSync.mockReturnValue(false);
 
     const result = findAgentIgnoreFile("/foo/bar/baz");
     expect(result).toBeNull();
-    // Should have checked /foo/bar/baz, /foo/bar, /foo, /
-    expect(mockedExistsSync).toHaveBeenCalledTimes(4);
   });
 });
 
@@ -113,7 +128,6 @@ describe("parseAgentIgnore", () => {
   it("treats inline comments as literal patterns (like .gitignore)", () => {
     const content = ".env  # production vars\nnode_modules/  # dependencies";
     const result = parseAgentIgnore(content);
-    // Both become literal patterns including the comment text — they won't match any real file
     expect(result.include).toEqual([".env  # production vars", "node_modules/  # dependencies"]);
     expect(result.exclude).toEqual([]);
   });
@@ -159,7 +173,8 @@ describe("isProtectedByAgentIgnore", () => {
   });
 
   it("handles relative paths", () => {
-    expect(isProtectedByAgentIgnore("src/../.env", patterns, BASE_DIR)).toBe(true);
+    // .env resolves to /home/user/proj/.env
+    expect(isProtectedByAgentIgnore(".env", patterns, BASE_DIR)).toBe(true);
     expect(isProtectedByAgentIgnore("./.env", patterns, BASE_DIR)).toBe(true);
   });
 

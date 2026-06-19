@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   isDangerousCommand,
-  DANGEROUS_PATTERNS,
+  ALL_PATTERNS as DANGEROUS_PATTERNS,
 } from "../../extensions/guardrail/dangerous-commands";
 
 describe("isDangerousCommand", () => {
@@ -104,11 +104,11 @@ describe("isDangerousCommand", () => {
   });
 
   describe("DANGEROUS_PATTERNS", () => {
-    it("has 8 compiled regex patterns", () => {
-      expect(DANGEROUS_PATTERNS).toHaveLength(8);
-      for (const pattern of DANGEROUS_PATTERNS) {
-        expect(pattern).toBeInstanceOf(RegExp);
-        expect(pattern.flags).toContain("i"); // case-insensitive
+    it("has 9 compiled regex patterns (7 restricted + 2 elevated)", () => {
+      expect(DANGEROUS_PATTERNS).toHaveLength(9);
+      for (const entry of DANGEROUS_PATTERNS) {
+        expect(entry.regex).toBeInstanceOf(RegExp);
+        expect(entry.regex.flags).toContain("i"); // case-insensitive
       }
     });
   });

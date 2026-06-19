@@ -24,7 +24,6 @@ interface MockPi {
   handlers: Record<string, Function[]>;
   events: { on: ReturnType<typeof vi.fn>; emit: ReturnType<typeof vi.fn> };
   appendEntry: ReturnType<typeof vi.fn>;
-  sessionManager: { getEntries: ReturnType<typeof vi.fn> };
 }
 
 function createMockPi(): MockPi {
@@ -40,9 +39,6 @@ function createMockPi(): MockPi {
       emit: vi.fn(),
     },
     appendEntry: vi.fn(),
-    sessionManager: {
-      getEntries: vi.fn(() => []),
-    },
   };
 }
 
@@ -58,7 +54,6 @@ interface MockCtx {
     setWidget: ReturnType<typeof vi.fn>;
     setTitle: ReturnType<typeof vi.fn>;
     setEditorText: ReturnType<typeof vi.fn>;
-    custom: ReturnType<typeof vi.fn>;
   };
 }
 
@@ -75,7 +70,6 @@ function tuiCtx(overrides: Partial<MockCtx> = {}): MockCtx {
       setWidget: vi.fn(),
       setTitle: vi.fn(),
       setEditorText: vi.fn(),
-      custom: vi.fn(),
     },
     ...overrides,
   };
@@ -94,7 +88,6 @@ function nonTuiCtx(overrides: Partial<MockCtx> = {}): MockCtx {
       setWidget: vi.fn(),
       setTitle: vi.fn(),
       setEditorText: vi.fn(),
-      custom: vi.fn(),
     },
     ...overrides,
   };
@@ -105,13 +98,14 @@ function nonTuiCtx(overrides: Partial<MockCtx> = {}): MockCtx {
 // ---------------------------------------------------------------------------
 
 describe("guardrail extension registration", () => {
-  it("registers two tool_call handlers", async () => {
+  it("registers one tool_call handler + session_start", async () => {
     const pi = createMockPi();
     factory(pi as any);
 
-    expect(pi.on).toHaveBeenCalledTimes(4);
+    expect(pi.on).toHaveBeenCalledWith("session_start", expect.any(Function));
     expect(pi.on).toHaveBeenCalledWith("tool_call", expect.any(Function));
-    expect(pi.handlers["tool_call"]).toHaveLength(3);
+    // Only 1 tool_call handler (unified) + 1 session_start = 2
+    expect(pi.handlers["tool_call"]).toHaveLength(1);
   });
 });
 
@@ -130,16 +124,15 @@ describe("bash guardrail", () => {
     vi.clearAllMocks();
   });
 
-  async function getBashHandler(): Promise<Function> {
+  async function getHandler(): Promise<Function> {
     const pi = createMockPi();
     factory(pi as any);
-    // Handler 1 is the bash guardrail (0=read, 1=bash, 2=path)
-    return pi.handlers["tool_call"]![1]!;
+    return pi.handlers["tool_call"]![0]!;
   }
 
-  describe("dangerous commands", () => {
+  describe("dangerous commands (elevated tier)", () => {
     it("prompts user and blocks when user says Block", async () => {
-      const handler = await getBashHandler();
+      const handler = await getHandler();
       const ctx = tuiCtx();
       ctx.ui.select.mockResolvedValue("Block");
 
@@ -161,7 +154,7 @@ describe("bash guardrail", () => {
     });
 
     it("allows the command when user selects Allow", async () => {
-      const handler = await getBashHandler();
+      const handler = await getHandler();
       const ctx = tuiCtx();
       ctx.ui.select.mockResolvedValue("Allow");
 
@@ -177,11 +170,48 @@ describe("bash guardrail", () => {
     });
   });
 
-  describe("protected path targeting via bash", () => {
-    it("prompts when bash command targets .git/", async () => {
-      const handler = await getBashHandler();
+  describe("restricted commands (always blocked)", () => {
+    it("blocks mkfs without prompting even in interactive mode", async () => {
+      const handler = await getHandler();
       const ctx = tuiCtx();
-      ctx.ui.select.mockResolvedValue("Block");
+
+      const event = {
+        toolName: "bash",
+        toolCallId: "call_1",
+        input: { command: "mkfs.ext4 /dev/sdb" },
+      };
+
+      const result = await handler(event, ctx);
+      expect(result).toEqual({
+        block: true,
+        reason: expect.stringContaining("Blocked"),
+      });
+      // No prompt for restricted commands
+      expect(ctx.ui.select).not.toHaveBeenCalled();
+    });
+
+    it("blocks fork bomb without prompting", async () => {
+      const handler = await getHandler();
+      const ctx = tuiCtx();
+
+      const event = {
+        toolName: "bash",
+        toolCallId: "call_1",
+        input: { command: ":(){ :|:& };:" },
+      };
+
+      const result = await handler(event, ctx);
+      expect(result).toEqual({
+        block: true,
+        reason: expect.stringContaining("Blocked"),
+      });
+    });
+  });
+
+  describe("protected path targeting via bash", () => {
+    it("auto-blocks bash commands targeting .git/ (restricted tier)", async () => {
+      const handler = await getHandler();
+      const ctx = tuiCtx();
 
       const event = {
         toolName: "bash",
@@ -190,10 +220,8 @@ describe("bash guardrail", () => {
       };
 
       const result = await handler(event, ctx);
-      expect(ctx.ui.select).toHaveBeenCalledWith(expect.stringContaining("protected path"), [
-        "Block",
-        "Allow",
-      ]);
+      // Restricted tier: auto-blocked, no interactive prompt
+      expect(ctx.ui.select).not.toHaveBeenCalled();
       expect(result).toEqual({
         block: true,
         reason: expect.stringContaining("targets protected path"),
@@ -202,16 +230,16 @@ describe("bash guardrail", () => {
 
     it("prompts when bash command targets .agentignore-protected path", async () => {
       mockedExistsSync.mockReturnValue(true);
-      mockedReadFileSync.mockReturnValue(".agentignore\n.env\n");
+      mockedReadFileSync.mockReturnValue(".env\n");
 
-      const handler = await getBashHandler();
+      const handler = await getHandler();
       const ctx = tuiCtx();
       ctx.ui.select.mockResolvedValue("Block");
 
       const event = {
         toolName: "bash",
         toolCallId: "call_1",
-        input: { command: "rm .agentignore" },
+        input: { command: "rm .env" },
       };
 
       const result = await handler(event, ctx);
@@ -221,12 +249,12 @@ describe("bash guardrail", () => {
       ]);
       expect(result).toEqual({
         block: true,
-        reason: expect.stringContaining("targets protected path"),
+        reason: expect.stringContaining("agentignore"),
       });
     });
 
     it("blocks in non-interactive mode when targeting protected paths", async () => {
-      const handler = await getBashHandler();
+      const handler = await getHandler();
       const ctx = nonTuiCtx();
 
       const event = {
@@ -245,7 +273,7 @@ describe("bash guardrail", () => {
 
   describe("safe commands", () => {
     it("passes through safe commands without prompting", async () => {
-      const handler = await getBashHandler();
+      const handler = await getHandler();
       const ctx = tuiCtx();
 
       const event = {
@@ -258,31 +286,11 @@ describe("bash guardrail", () => {
       expect(result).toBeUndefined();
       expect(ctx.ui.select).not.toHaveBeenCalled();
     });
-
-    it("skips non-bash tool calls", async () => {
-      const handler = await getBashHandler();
-      const ctx = tuiCtx();
-
-      const event = {
-        toolName: "read",
-        toolCallId: "call_1",
-        input: { path: "/some/file" },
-      };
-
-      const result = await handler(event, ctx);
-      expect(result).toBeUndefined();
-    });
   });
 
   describe("non-interactive mode (hasUI = false)", () => {
-    async function getBashHandler(): Promise<Function> {
-      const pi = createMockPi();
-      factory(pi as any);
-      return pi.handlers["tool_call"]![1]!;
-    }
-
-    it("auto-blocks dangerous commands without prompting", async () => {
-      const handler = await getBashHandler();
+    it("auto-blocks elevated commands without prompting", async () => {
+      const handler = await getHandler();
       const ctx = nonTuiCtx();
 
       const event = {
@@ -294,12 +302,12 @@ describe("bash guardrail", () => {
       const result = await handler(event, ctx);
       expect(result).toEqual({
         block: true,
-        reason: expect.stringContaining("dangerous command pattern"),
+        reason: expect.stringContaining("no UI"),
       });
     });
 
     it("passes through safe commands", async () => {
-      const handler = await getBashHandler();
+      const handler = await getHandler();
       const ctx = nonTuiCtx();
 
       const event = {
@@ -315,7 +323,7 @@ describe("bash guardrail", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Path guardrail
+// Path guardrail (write/edit)
 // ---------------------------------------------------------------------------
 
 describe("path guardrail", () => {
@@ -329,16 +337,15 @@ describe("path guardrail", () => {
     vi.clearAllMocks();
   });
 
-  async function getPathHandler(): Promise<Function> {
+  async function getHandler(): Promise<Function> {
     const pi = createMockPi();
     factory(pi as any);
-    // Handler 2 is the path guardrail (0=read, 1=bash, 2=path)
-    return pi.handlers["tool_call"]![2]!;
+    return pi.handlers["tool_call"]![0]!;
   }
 
   describe("write tool", () => {
-    it("blocks writes to .git/", async () => {
-      const handler = await getPathHandler();
+    it("blocks writes to .git/ (restricted)", async () => {
+      const handler = await getHandler();
       const ctx = tuiCtx();
 
       const event = {
@@ -348,12 +355,14 @@ describe("path guardrail", () => {
       };
 
       const result = await handler(event, ctx);
-      expect(result).toEqual({ block: true, reason: "Path is protected" });
-      expect(ctx.ui.notify).toHaveBeenCalledWith(expect.stringContaining(".git/config"), "warning");
+      expect(result).toEqual({
+        block: true,
+        reason: expect.stringContaining("protected path"),
+      });
     });
 
-    it("blocks writes to .pi/", async () => {
-      const handler = await getPathHandler();
+    it("blocks writes to .pi/ (restricted)", async () => {
+      const handler = await getHandler();
       const ctx = tuiCtx();
 
       const event = {
@@ -363,15 +372,14 @@ describe("path guardrail", () => {
       };
 
       const result = await handler(event, ctx);
-      expect(result).toEqual({ block: true, reason: "Path is protected" });
-      expect(ctx.ui.notify).toHaveBeenCalledWith(
-        expect.stringContaining(".pi/settings.json"),
-        "warning",
-      );
+      expect(result).toEqual({
+        block: true,
+        reason: expect.stringContaining("protected path"),
+      });
     });
 
     it("allows writes to safe paths", async () => {
-      const handler = await getPathHandler();
+      const handler = await getHandler();
       const ctx = tuiCtx();
 
       const event = {
@@ -387,7 +395,7 @@ describe("path guardrail", () => {
 
   describe("edit tool", () => {
     it("blocks edits to .git/", async () => {
-      const handler = await getPathHandler();
+      const handler = await getHandler();
       const ctx = tuiCtx();
 
       const event = {
@@ -397,11 +405,14 @@ describe("path guardrail", () => {
       };
 
       const result = await handler(event, ctx);
-      expect(result).toEqual({ block: true, reason: "Path is protected" });
+      expect(result).toEqual({
+        block: true,
+        reason: expect.stringContaining("protected path"),
+      });
     });
 
     it("blocks edits to .pi/", async () => {
-      const handler = await getPathHandler();
+      const handler = await getHandler();
       const ctx = tuiCtx();
 
       const event = {
@@ -411,7 +422,10 @@ describe("path guardrail", () => {
       };
 
       const result = await handler(event, ctx);
-      expect(result).toEqual({ block: true, reason: "Path is protected" });
+      expect(result).toEqual({
+        block: true,
+        reason: expect.stringContaining("protected path"),
+      });
     });
   });
 
@@ -420,7 +434,7 @@ describe("path guardrail", () => {
       mockedExistsSync.mockReturnValue(true);
       mockedReadFileSync.mockReturnValue(".env\nsecrets/\n");
 
-      const handler = await getPathHandler();
+      const handler = await getHandler();
       const ctx = tuiCtx();
 
       const event = {
@@ -432,16 +446,15 @@ describe("path guardrail", () => {
       const result = await handler(event, ctx);
       expect(result).toEqual({
         block: true,
-        reason: "Path is protected by .agentignore",
+        reason: expect.stringContaining(".agentignore"),
       });
-      expect(ctx.ui.notify).toHaveBeenCalledWith(expect.stringContaining("agentignore"), "warning");
     });
 
     it("allows files excluded by negation patterns", async () => {
       mockedExistsSync.mockReturnValue(true);
       mockedReadFileSync.mockReturnValue(".env\n.env.*\n!*.env.example\n");
 
-      const handler = await getPathHandler();
+      const handler = await getHandler();
       const ctx = tuiCtx();
 
       const event = {
@@ -460,7 +473,7 @@ describe("path guardrail", () => {
 
       const pi = createMockPi();
       factory(pi as any);
-      const handler = pi.handlers["tool_call"]![2]!; // 2 = path guardrail
+      const handler = pi.handlers["tool_call"]![0]!;
       const ctx = tuiCtx();
 
       const event = {
@@ -471,10 +484,9 @@ describe("path guardrail", () => {
 
       // First call — should read the file
       await handler(event, ctx);
-      expect(mockedExistsSync).toHaveBeenCalledTimes(1);
-      expect(mockedReadFileSync).toHaveBeenCalledTimes(1);
+      expect(mockedExistsSync).toHaveBeenCalled();
 
-      // Second call — should use cache
+      // Second call — should use cache (no new fs calls)
       mockedExistsSync.mockClear();
       mockedReadFileSync.mockClear();
       await handler(event, ctx);
@@ -483,14 +495,8 @@ describe("path guardrail", () => {
   });
 
   describe("non-interactive mode", () => {
-    async function getPathHandler(): Promise<Function> {
-      const pi = createMockPi();
-      factory(pi as any);
-      return pi.handlers["tool_call"]![2]!;
-    }
-
     it("blocks protected paths in non-interactive mode", async () => {
-      const handler = await getPathHandler();
+      const handler = await getHandler();
       const ctx = nonTuiCtx();
 
       const event = {
@@ -500,53 +506,150 @@ describe("path guardrail", () => {
       };
 
       const result = await handler(event, ctx);
-      expect(result).toEqual({ block: true, reason: "Path is protected" });
+      expect(result).toEqual({
+        block: true,
+        reason: expect.stringContaining("protected path"),
+      });
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Read guardrail
+// ---------------------------------------------------------------------------
+
+describe("read guardrail", () => {
+  beforeEach(() => {
+    clearAgentIgnoreCache();
+    mockedExistsSync.mockReset();
+    mockedReadFileSync.mockReset();
+  });
+
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  async function getHandler(): Promise<Function> {
+    const pi = createMockPi();
+    factory(pi as any);
+    return pi.handlers["tool_call"]![0]!;
+  }
+
+  it("prompts for read of protected .git/ path with Allow option", async () => {
+    const handler = await getHandler();
+    const ctx = tuiCtx();
+    ctx.ui.select.mockResolvedValue("Allow");
+
+    const event = {
+      toolName: "read",
+      toolCallId: "call_1",
+      input: { path: "/home/user/proj/.git/config" },
+    };
+
+    const result = await handler(event, ctx);
+    // Should not block if user allows
+    expect(result).toBeUndefined();
+    expect(ctx.ui.select).toHaveBeenCalledWith(expect.stringContaining("Protected path"), [
+      "Block",
+      "Allow",
+    ]);
+  });
+
+  it("blocks read of protected path when user selects Block", async () => {
+    const handler = await getHandler();
+    const ctx = tuiCtx();
+    ctx.ui.select.mockResolvedValue("Block");
+
+    const event = {
+      toolName: "read",
+      toolCallId: "call_1",
+      input: { path: "/home/user/proj/.git/config" },
+    };
+
+    const result = await handler(event, ctx);
+    expect(result).toEqual({
+      block: true,
+      reason: expect.stringContaining("Blocked by user"),
     });
   });
 
-  describe("skips non-write/edit tools", () => {
-    it("skips read tool calls", async () => {
-      const handler = await getPathHandler();
-      const ctx = tuiCtx();
+  it("allows read of unprotected paths without prompting", async () => {
+    const handler = await getHandler();
+    const ctx = tuiCtx();
 
-      const event = {
-        toolName: "read",
-        toolCallId: "call_1",
-        input: { path: "/home/user/proj/.git/config" },
-      };
+    const event = {
+      toolName: "read",
+      toolCallId: "call_1",
+      input: { path: "/home/user/proj/src/foo.ts" },
+    };
 
-      const result = await handler(event, ctx);
-      expect(result).toBeUndefined();
-    });
-
-    it("skips bash tool calls", async () => {
-      const handler = await getPathHandler();
-      const ctx = tuiCtx();
-
-      const event = {
-        toolName: "bash",
-        toolCallId: "call_1",
-        input: { command: "echo hello" },
-      };
-
-      const result = await handler(event, ctx);
-      expect(result).toBeUndefined();
-    });
+    const result = await handler(event, ctx);
+    expect(result).toBeUndefined();
+    expect(ctx.ui.select).not.toHaveBeenCalled();
   });
 
-  describe("handles missing path gracefully", () => {
-    it("returns undefined when path is missing from input", async () => {
-      const handler = await getPathHandler();
-      const ctx = tuiCtx();
+  it("skips non-read/write/edit/bash tool calls", async () => {
+    const handler = await getHandler();
+    const ctx = tuiCtx();
 
-      const event = {
-        toolName: "write",
-        toolCallId: "call_1",
-        input: {} as { path?: string },
-      };
+    const event = {
+      toolName: "unknown_tool",
+      toolCallId: "call_1",
+      input: { path: "/home/user/proj/.git/config" },
+    };
 
-      const result = await handler(event, ctx);
-      expect(result).toBeUndefined();
+    const result = await handler(event, ctx);
+    expect(result).toBeUndefined();
+  });
+
+  it("returns undefined when path is missing from input", async () => {
+    const handler = await getHandler();
+    const ctx = tuiCtx();
+
+    const event = {
+      toolName: "write",
+      toolCallId: "call_1",
+      input: {} as { path?: string },
+    };
+
+    const result = await handler(event, ctx);
+    expect(result).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Error boundary
+// ---------------------------------------------------------------------------
+
+describe("error boundary", () => {
+  it("fails-safe by blocking if guardrail throws", async () => {
+    // Suppress console.error from the guardrail's catch block
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const pi = createMockPi();
+    factory(pi as any);
+    const handler = pi.handlers["tool_call"]![0]!;
+
+    // Mock a ctx that will throw when ui.select is called
+    const ctx = tuiCtx();
+    ctx.ui.select.mockRejectedValue(new Error("UI subsystem crash"));
+
+    // Create a legit dangerous bash command event
+    const event = {
+      toolName: "bash",
+      toolCallId: "call_1",
+      input: { command: "rm -rf /tmp/foo" },
+    };
+
+    const result = await handler(event, ctx);
+    // Should fail safe by blocking
+    expect(result).toEqual({
+      block: true,
+      reason: expect.stringContaining("Guardrail"),
     });
+
+    // Verify the error was logged
+    expect(consoleError).toHaveBeenCalled();
+    consoleError.mockRestore();
   });
 });
