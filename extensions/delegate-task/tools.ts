@@ -105,6 +105,7 @@ export function createAgentTools(currentAgentId: string) {
               });
             }
           },
+          currentAgentId, // replyTo — when this agent is re-invoked, report to who delegated it
         );
         return {
           content: [{ type: "text", text: result }],

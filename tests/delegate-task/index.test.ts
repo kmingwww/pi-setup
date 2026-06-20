@@ -4,7 +4,7 @@ import { agentManager } from "../../extensions/delegate-task/agent-manager";
 import delegateTaskPlugin from "../../extensions/delegate-task/index";
 
 describe("delegate-task", () => {
-  it("registers delegate_task and list_agents tools and wires mainNotify", async () => {
+  it("registers delegate_task and list_agents tools and adapter for main", async () => {
     const mockPi = {
       registerTool: vi.fn(),
       registerCommand: vi.fn(),
@@ -12,7 +12,6 @@ describe("delegate-task", () => {
     };
 
     agentManager.agents.clear();
-    agentManager.mainNotify = undefined;
 
     await delegateTaskPlugin(mockPi as unknown as ExtensionAPI);
 
@@ -25,9 +24,12 @@ describe("delegate-task", () => {
     expect(names).toContain("delegate_task");
     expect(names).toContain("list_agents");
 
-    // mainNotify should be wired to sendUserMessage
-    expect(agentManager.mainNotify).toBeDefined();
-    await agentManager.mainNotify!("test message");
+    // Main should NOT be in the agents map (adapters are separate)
+    expect(agentManager.agents.has("main")).toBe(false);
+
+    // Deliver a message via the manager — the plugin registered an adapter
+    // that forwards to pi.sendUserMessage
+    await agentManager.deliverMessage("main", "test message");
     expect(mockPi.sendUserMessage).toHaveBeenCalledWith("test message", {
       deliverAs: "followUp",
     });

@@ -1,18 +1,24 @@
 import fs from "fs/promises";
 import path from "path";
 import os from "os";
-import type { AgentSession, SessionStats } from "@earendil-works/pi-coding-agent";
+import type { AgentSession, SessionStats, AgentToolResult } from "@earendil-works/pi-coding-agent";
+
+/** Delivery adapter for agents that don't have a directly accessible session (e.g. main). */
+export interface AgentAdapter {
+  /** Deliver a message to this agent. Called by peers when their async task finishes. */
+  deliverMessage(content: string): Promise<void>;
+}
 
 /** Tracks spawned agent sessions, provides cleanup on exit. */
-
 export interface AgentInfo {
   status: "running" | "idle";
   agentType: string;
   currentTask?: string;
   result?: string;
-  cwd?: string; // Working directory the agent operates in
+  cwd?: string;
   session?: AgentSession; // Kept alive after task completes for re-use
-  notifications: string[]; // Async completion notifications from delegated tasks
+  /** Who to report back to when an async re-invoke finishes. */
+  replyTo?: string;
   /** Cumulative token usage and cost from the agent session (snapshot at last markDone). */
   cost: number;
   tokenUsage: {
@@ -24,16 +30,55 @@ export interface AgentInfo {
   };
 }
 
+type ContentBlock = AgentToolResult<unknown>["content"][number];
+
+/** Extract the last assistant text block from agent state. */
+export function extractResultText(state: Pick<AgentSession["agent"]["state"], "messages">): string {
+  if (!state || !state.messages || state.messages.length === 0) {
+    return "Task completed, but no text output was generated.";
+  }
+
+  for (let i = state.messages.length - 1; i >= 0; i--) {
+    const msg = state.messages[i];
+    if (!msg || msg.role !== "assistant" || !("content" in msg)) continue;
+    const content = msg.content;
+    if (typeof content === "string") {
+      const text = content.trim();
+      if (text) return text;
+      continue;
+    }
+    if (content.length === 0) continue;
+    const textBlock = content.find(
+      (c): c is Extract<ContentBlock, { type: "text" }> => c.type === "text",
+    );
+    if (textBlock && typeof textBlock.text === "string") {
+      const text = textBlock.text.trim();
+      if (text) return text;
+    }
+  }
+
+  return "Task completed, but no text output was generated.";
+}
+
 export class AgentManager {
   public agents = new Map<string, AgentInfo>();
 
-  /** Set by index.ts — wraps pi.sendUserMessage for async completion alerts. */
-  public mainNotify?: (msg: string) => Promise<void>;
+  /** Adapters for agents that don't have a session (e.g. main). */
+  private adapters = new Map<string, AgentAdapter>();
 
   private _cleanup?: () => void;
 
   constructor() {
     this.setupCleanupHooks();
+  }
+
+  /**
+   * Register an adapter for an agent that doesn't have a session directly
+   * accessible to the manager (e.g. main). Adapters live outside the agents
+   * map — they don't appear in list_agents or getActiveCount.
+   */
+  registerAdapter(id: string, adapter: AgentAdapter): void {
+    this.adapters.set(id, adapter);
   }
 
   register(
@@ -48,7 +93,6 @@ export class AgentManager {
       agentType,
       currentTask: task,
       cwd,
-      notifications: [],
       session,
       cost: 0,
       tokenUsage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
@@ -72,7 +116,6 @@ export class AgentManager {
       agent.currentTask = undefined;
       // Session stays alive — NOT cleared
 
-      // Snapshot cost/token stats from the session if available
       if (agent.session) {
         try {
           const stats: SessionStats = agent.session.getSessionStats();
@@ -85,17 +128,60 @@ export class AgentManager {
     }
   }
 
-  /** Route a notification to an agent.
-   *  If the target is a headless agent, stores on its record.
-   *  If the target is known to mainNotify, delegates there.
+  /**
+   * Peer-to-peer message delivery.
+   *
+   * If the target is RUNNING, queues the message as a follow-up via
+   * session.sendUserMessage(). If IDLE, runs a new turn directly via
+   * session.prompt() and forwards the result to the agent's replyTo.
+   * If the target has no session, falls back to the adapter.
    */
-  async notifyAgent(targetId: string, msg: string): Promise<void> {
-    if (targetId === "main") {
-      await this.mainNotify?.(msg);
-    } else {
-      const agent = this.agents.get(targetId);
-      if (agent) {
-        agent.notifications.push(msg);
+  async deliverMessage(targetId: string, content: string): Promise<void> {
+    const agent = this.agents.get(targetId);
+    if (!agent) {
+      const adapter = this.adapters.get(targetId);
+      if (adapter) await adapter.deliverMessage(content);
+      return;
+    }
+
+    if (!agent.session) return;
+
+    if (agent.status === "running") {
+      // Queue as follow-up — current turn will process it
+      await agent.session.sendUserMessage(content, { deliverAs: "followUp" });
+      return;
+    }
+
+    // IDLE — run a new turn and forward the result to replyTo
+    const replyTo = agent.replyTo;
+    agent.status = "running";
+    agent.currentTask = content;
+
+    try {
+      await agent.session.prompt(content);
+      const result = extractResultText(agent.session.agent.state);
+      agent.status = "idle";
+      agent.result = result;
+
+      // Take a snapshot of token usage
+      try {
+        const stats: SessionStats = agent.session.getSessionStats();
+        agent.cost = stats.cost;
+        agent.tokenUsage = { ...stats.tokens };
+      } catch {
+        // keep existing values
+      }
+
+      // Forward the result up the chain
+      if (replyTo) {
+        await this.deliverMessage(replyTo, result);
+      }
+    } catch (error) {
+      agent.status = "idle";
+      agent.result = "failed";
+      if (replyTo) {
+        const msg = error instanceof Error ? error.message : String(error);
+        await this.deliverMessage(replyTo, `❌ ${agent.agentType} failed: ${msg}`);
       }
     }
   }
@@ -116,23 +202,9 @@ export class AgentManager {
       context += `\n- [${agent.status.toUpperCase()}] ${agent.agentType} (${id})${cwdStr}${taskStr}`;
     }
 
-    // Also list available agent types that can be spawned
     const availableTypes = await discoverAgentTypes();
     if (availableTypes.length > 0) {
       context += `\n\nAVAILABLE TYPES (use as agentType in delegate_task):\n  ${availableTypes.join(", ")}`;
-    }
-
-    // Show pending notifications for the calling agent, then drain them
-    if (currentAgentId) {
-      const caller = currentAgentId === "main" ? null : this.agents.get(currentAgentId);
-      const notifs = caller?.notifications;
-      if (notifs && notifs.length > 0) {
-        context += "\n\nPENDING RESULTS FROM DELEGATED TASKS:";
-        for (const n of notifs) {
-          context += `\n  • ${n}`;
-        }
-        notifs.length = 0; // drain
-      }
     }
 
     return context;

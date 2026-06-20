@@ -5,10 +5,13 @@ import { agentManager, type AgentInfo } from "./agent-manager";
 import { createAgentTools } from "./tools";
 
 export default async function (pi: ExtensionAPI) {
-  // Wire up main session notification for async task completion.
-  agentManager.mainNotify = async (msg: string) => {
-    pi.sendUserMessage(msg, { deliverAs: "followUp" });
-  };
+  // Register adapter for main agent — its session is not directly accessible
+  // to the manager, so spawned agents deliver results through this adapter.
+  agentManager.registerAdapter("main", {
+    deliverMessage: async (content: string) => {
+      pi.sendUserMessage(content, { deliverAs: "followUp" });
+    },
+  });
 
   const tools = createAgentTools("main");
 

@@ -1,9 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import {
-  extractResult,
-  runWorker,
-  runWorkerAsync,
-} from "../../extensions/delegate-task/run-worker";
+import { runWorker, runWorkerAsync } from "../../extensions/delegate-task/run-worker";
+import { extractResultText as extractResult } from "../../extensions/delegate-task/agent-manager";
 import { AgentManager } from "../../extensions/delegate-task/agent-manager";
 import fs from "fs/promises";
 import os from "os";
@@ -229,103 +226,116 @@ describe("runWorkerAsync", () => {
     manager.destroy();
   });
 
-  it("routes success to mainNotify when caller is main", async () => {
-    manager.mainNotify = vi.fn().mockResolvedValue(undefined);
+  it("delivers success to main via adapter", async () => {
+    const adapter = { deliverMessage: vi.fn().mockResolvedValue(undefined) };
+    manager.registerAdapter("main", adapter);
 
     let notifyResolve: () => void;
     const notifyCalled = new Promise<void>((resolve) => {
       notifyResolve = resolve;
     });
-    manager.mainNotify = vi.fn().mockImplementation(async () => {
+    // Override to also resolve the promise
+    const originalDeliver = adapter.deliverMessage;
+    adapter.deliverMessage = vi.fn().mockImplementation(async (msg: string) => {
+      await originalDeliver(msg);
       notifyResolve();
     });
 
     runWorkerAsync("do some research", "researcher", "main-session-123", manager, "main");
     await notifyCalled;
 
-    expect(manager.mainNotify).toHaveBeenCalledTimes(1);
-    const msg = manager.mainNotify!.mock?.calls[0]?.[0] as string;
-    expect(msg).toMatch(/^✅ researcher done:/);
+    expect(adapter.deliverMessage).toHaveBeenCalledTimes(1);
+    const msg = adapter.deliverMessage.mock.calls[0]![0] as string;
+    expect(msg).toContain("✅ researcher done:");
     expect(msg).toContain("Final result text");
   });
 
-  it("stores notification on headless agent record when caller is not main", async () => {
-    manager.register("child-agent", "researcher", "first task");
-
-    const notifyCalled = new Promise<void>((resolve) => {
-      const check = () => {
-        const n = manager.agents.get("child-agent")?.notifications;
-        if (n && n.length > 0) resolve();
-        else setTimeout(check, 1);
-      };
-      check();
-    });
-
-    runWorkerAsync("research", "researcher", "main-123", manager, "child-agent");
-    await notifyCalled;
-
-    const agent = manager.agents.get("child-agent")!;
-    expect(agent.notifications.length).toBe(1);
-    expect(agent.notifications[0]).toMatch(/^✅ researcher done:/);
-    expect(agent.notifications[0]).toContain("Final result text");
-  });
-
-  it("catches errors and sends failure notification to main", async () => {
-    const { createAgentSession } = await import("@earendil-works/pi-coding-agent");
-    vi.mocked(createAgentSession).mockRejectedValueOnce(new Error("Network failure"));
-
-    manager.mainNotify = vi.fn().mockResolvedValue(undefined);
+  it("delivers to headless agent via session.sendUserMessage", async () => {
+    const mockSession = {
+      sendUserMessage: vi.fn().mockResolvedValue(undefined),
+    } as any;
+    manager.register("child-agent", "researcher", "first task", undefined, mockSession);
 
     let notifyResolve: () => void;
     const notifyCalled = new Promise<void>((resolve) => {
       notifyResolve = resolve;
     });
-    manager.mainNotify = vi.fn().mockImplementation(async () => {
+    // Override to also resolve the promise
+    const originalSend = mockSession.sendUserMessage;
+    mockSession.sendUserMessage = vi.fn().mockImplementation(async (...args: any[]) => {
+      await originalSend(...args);
+      notifyResolve();
+    });
+
+    runWorkerAsync("research", "researcher", "main-123", manager, "child-agent");
+    await notifyCalled;
+
+    expect(mockSession.sendUserMessage).toHaveBeenCalledTimes(1);
+    const msg = mockSession.sendUserMessage.mock.calls[0]![0] as string;
+    expect(msg).toContain("✅ researcher done:");
+    expect(msg).toContain("Final result text");
+  });
+
+  it("delivers failure to main when worker crashes", async () => {
+    const { createAgentSession } = await import("@earendil-works/pi-coding-agent");
+    vi.mocked(createAgentSession).mockRejectedValueOnce(new Error("Network failure"));
+
+    const adapter = { deliverMessage: vi.fn().mockResolvedValue(undefined) };
+    manager.registerAdapter("main", adapter);
+
+    let notifyResolve: () => void;
+    const notifyCalled = new Promise<void>((resolve) => {
+      notifyResolve = resolve;
+    });
+    adapter.deliverMessage = vi.fn().mockImplementation(async () => {
       notifyResolve();
     });
 
     runWorkerAsync("research", "researcher", "main-123", manager, "main");
     await notifyCalled;
 
-    expect(manager.mainNotify).toHaveBeenCalledTimes(1);
-    const msg = manager.mainNotify!.mock?.calls[0]?.[0] as string;
-    expect(msg).toMatch(/^❌ researcher failed:/);
+    const msg = adapter.deliverMessage.mock.calls[0]![0] as string;
+    expect(msg).toContain("❌ researcher failed:");
     expect(msg).toContain("Network failure");
   });
 
-  it("catches errors and stores failure on headless agent", async () => {
+  it("delivers failure to headless agent when worker crashes", async () => {
     const { createAgentSession } = await import("@earendil-works/pi-coding-agent");
     vi.mocked(createAgentSession).mockRejectedValueOnce(new Error("Network failure"));
 
-    manager.register("child-agent", "researcher", "task");
+    const mockSession = {
+      sendUserMessage: vi.fn().mockResolvedValue(undefined),
+    } as any;
+    manager.register("child-agent", "researcher", "task", undefined, mockSession);
 
+    let notifyResolve: () => void;
     const notifyCalled = new Promise<void>((resolve) => {
-      const check = () => {
-        const n = manager.agents.get("child-agent")?.notifications;
-        if (n && n.length > 0) resolve();
-        else setTimeout(check, 1);
-      };
-      check();
+      notifyResolve = resolve;
+    });
+    mockSession.sendUserMessage = vi.fn().mockImplementation(async () => {
+      notifyResolve();
     });
 
     runWorkerAsync("research", "researcher", "main-123", manager, "child-agent");
     await notifyCalled;
 
-    expect(manager.agents.get("child-agent")!.notifications[0]).toMatch(/^❌ researcher failed:/);
-    expect(manager.agents.get("child-agent")!.notifications[0]).toContain("Network failure");
+    const msg = mockSession.sendUserMessage.mock.calls[0]![0] as string;
+    expect(msg).toContain("❌ researcher failed:");
+    expect(msg).toContain("Network failure");
   });
 
   it("marks agent as idle even when worker crashes", async () => {
     const { createAgentSession } = await import("@earendil-works/pi-coding-agent");
     vi.mocked(createAgentSession).mockRejectedValueOnce(new Error("Network failure"));
 
-    manager.mainNotify = vi.fn().mockResolvedValue(undefined);
+    const adapter = { deliverMessage: vi.fn().mockResolvedValue(undefined) };
+    manager.registerAdapter("main", adapter);
 
     let notifyResolve: () => void;
     const notifyCalled = new Promise<void>((resolve) => {
       notifyResolve = resolve;
     });
-    manager.mainNotify = vi.fn().mockImplementation(async () => {
+    adapter.deliverMessage = vi.fn().mockImplementation(async () => {
       notifyResolve();
     });
 

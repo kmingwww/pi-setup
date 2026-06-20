@@ -10,18 +10,9 @@ import {
   createAgentSession,
   getAgentDir,
 } from "@earendil-works/pi-coding-agent";
-import { AgentManager, findAgentFile, parseAgentFile } from "./agent-manager";
+import { AgentManager, findAgentFile, parseAgentFile, extractResultText } from "./agent-manager";
 import { createAgentTools } from "./tools";
-import type {
-  AgentSession,
-  AgentSessionEvent,
-  AgentToolResult,
-} from "@earendil-works/pi-coding-agent";
-
-function truncate(s: string, max: number): string {
-  if (s.length <= max) return s;
-  return s.slice(0, max - 1) + "…";
-}
+import type { AgentSession, AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 
 /** Structured tool activity — facts only. Presentation lives in tools.ts renderResult. */
 export interface ToolLogEntry {
@@ -81,36 +72,6 @@ function wireToolStream(session: AgentSession, onUpdate: (entries: ToolLogEntry[
   });
 }
 
-type ContentBlock = AgentToolResult<unknown>["content"][number];
-
-/** Extract the last assistant text block from agent state. */
-export function extractResult(state: Pick<AgentSession["agent"]["state"], "messages">): string {
-  if (!state || !state.messages || state.messages.length === 0) {
-    return "Task completed, but no text output was generated.";
-  }
-
-  for (let i = state.messages.length - 1; i >= 0; i--) {
-    const msg = state.messages[i];
-    if (!msg || msg.role !== "assistant" || !("content" in msg)) continue;
-    const content = msg.content;
-    if (typeof content === "string") {
-      const text = content.trim();
-      if (text) return text;
-      continue;
-    }
-    if (content.length === 0) continue;
-    const textBlock = content.find(
-      (c): c is Extract<ContentBlock, { type: "text" }> => c.type === "text",
-    );
-    if (textBlock && typeof textBlock.text === "string") {
-      const text = textBlock.text.trim();
-      if (text) return text;
-    }
-  }
-
-  return "Task completed, but no text output was generated.";
-}
-
 async function createChildSession(
   agentType: string,
   mainSessionId: string,
@@ -160,7 +121,6 @@ async function createChildSession(
     sessionManager: SessionManager.create(agentCwd, sessionDir),
   });
 
-  // ── Structured streaming via sub.subscribe() ──
   if (onUpdate) {
     wireToolStream(sub, onUpdate);
   }
@@ -174,6 +134,9 @@ async function createChildSession(
  * When targeting an existing agent by ID the agent keeps its accumulated context.
  * When no ID is given, or the target agent doesn't exist, a new agent is created.
  * After completion the agent stays alive (idle) for future reuse.
+ *
+ * @param replyTo Who the agent should report back to when re-invoked by
+ *   an async sub-delegation result (sets agent.replyTo).
  */
 export async function runWorker(
   task: string,
@@ -183,21 +146,22 @@ export async function runWorker(
   agentId?: string,
   cwd?: string,
   onUpdate?: (entries: ToolLogEntry[]) => void,
+  replyTo?: string,
 ): Promise<string> {
   // Target an existing agent by ID, if given and it exists
   if (agentId) {
     const existing = manager.agents.get(agentId);
     if (existing && existing.session) {
+      if (replyTo) existing.replyTo = replyTo;
       manager.markRunning(agentId, task);
 
-      // ── Wire onUpdate to the existing session's event stream ──
       if (onUpdate) {
         wireToolStream(existing.session, onUpdate);
       }
 
       try {
         await existing.session.prompt(task);
-        const result = extractResult(existing.session.agent.state);
+        const result = extractResultText(existing.session.agent.state);
         manager.markDone(agentId, result);
         return result;
       } catch (error) {
@@ -211,6 +175,12 @@ export async function runWorker(
   const childAgentId = `agent-${crypto.randomUUID()}`;
   manager.register(childAgentId, agentType, task, cwd);
 
+  // Set replyTo on the new agent
+  if (replyTo) {
+    const record = manager.agents.get(childAgentId);
+    if (record) record.replyTo = replyTo;
+  }
+
   let result = "Task failed or was aborted.";
   try {
     const sub = await createChildSession(agentType, mainSessionId, childAgentId, cwd, onUpdate);
@@ -219,7 +189,7 @@ export async function runWorker(
     if (record) record.session = sub;
 
     await sub.prompt(task);
-    result = extractResult(sub.agent.state);
+    result = extractResultText(sub.agent.state);
     return result;
   } finally {
     manager.markDone(childAgentId, result);
@@ -228,9 +198,10 @@ export async function runWorker(
 
 /**
  * Fire-and-forget async wrapper around runWorker.
- * On completion, routes the notification to the caller via manager.notifyAgent.
- * - Caller is "main" → pi.sendUserMessage (via mainNotify)
- * - Caller is a headless agent → stored on that agent's record (visible via list_agents)
+ *
+ * On completion, delivers the result to the caller via manager.deliverMessage().
+ * This uses session.sendUserMessage() for peer-to-peer delivery — idle agents
+ * wake up and process the result automatically. No custom notification protocol.
  * Never throws.
  */
 export function runWorkerAsync(
@@ -253,11 +224,12 @@ export function runWorkerAsync(
         agentId,
         cwd,
         onUpdate,
+        callerId, // replyTo — when this agent is re-invoked, report to the caller
       );
-      await manager.notifyAgent(callerId, `✅ ${agentType} done: ${truncate(result, 280)}`);
+      await manager.deliverMessage(callerId, `✅ ${agentType} done: ${result}`);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      await manager.notifyAgent(callerId, `❌ ${agentType} failed: ${truncate(message, 280)}`);
+      await manager.deliverMessage(callerId, `❌ ${agentType} failed: ${message}`);
     }
   })();
 }

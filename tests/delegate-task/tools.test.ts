@@ -7,18 +7,12 @@ import * as runWorkerModule from "../../extensions/delegate-task/run-worker";
 describe("createAgentTools", () => {
   beforeEach(() => {
     agentManager.agents.clear();
-    agentManager.mainNotify = undefined;
     // mock runWorker
     vi.spyOn(runWorkerModule, "runWorker").mockResolvedValue("Worker mock result");
-    // mock runWorkerAsync (fire and forget)
+    // mock runWorkerAsync (fire and forget) — calls deliverMessage
     vi.spyOn(runWorkerModule, "runWorkerAsync").mockImplementation(
-      (_task, _agentType, _sessionId, _manager, callerId, _agentId) => {
-        const msg = "✅ researcher done: Worker mock result";
-        if (callerId === "main") {
-          agentManager.mainNotify?.(msg);
-        } else {
-          agentManager.agents.get(callerId)?.notifications.push(msg);
-        }
+      (_task, _agentType, _sessionId, manager, callerId, _agentId) => {
+        void manager.deliverMessage(callerId, "✅ researcher done: Worker mock result");
       },
     );
   });
@@ -62,6 +56,7 @@ describe("createAgentTools", () => {
       undefined, // no agentId
       undefined, // no cwd
       expect.any(Function),
+      "main", // replyTo
     );
     expect(result.content).toEqual([{ type: "text", text: "Worker mock result" }]);
     expect(result.details).toEqual({ agentType: "researcher", tools: [] });
@@ -96,15 +91,16 @@ describe("createAgentTools", () => {
       "agent-existing-1",
       undefined, // no cwd
       expect.any(Function),
+      "main", // replyTo
     );
   });
 
-  it("list_agents shows pending notifications from the caller's notifications array", async () => {
-    const agentId = "agent-with-notifs";
-    agentManager.register(agentId, "researcher", "doing math");
-    agentManager.agents.get(agentId)!.notifications.push("✅ researcher done: found the answer");
+  it("list_agents shows agent statuses including idle and running", async () => {
+    agentManager.register("agent-1", "researcher", "doing math");
+    agentManager.register("agent-2", "coder", "writing tests");
+    agentManager.markDone("agent-2", "done");
 
-    const tools = createAgentTools(agentId);
+    const tools = createAgentTools("main");
     const statusTool = tools.find((t) => t.name === "list_agents")!;
 
     const result = await statusTool.execute(
@@ -116,11 +112,11 @@ describe("createAgentTools", () => {
     );
 
     const text = result.content[0]!.text as string;
-    expect(text).toContain("PENDING RESULTS FROM DELEGATED TASKS");
-    expect(text).toContain("✅ researcher done: found the answer");
-
-    // Notifications should be drained after reading
-    expect(agentManager.agents.get(agentId)!.notifications).toHaveLength(0);
+    expect(text).toContain("RUNNING AGENTS");
+    expect(text).toContain("[RUNNING] researcher (agent-1)");
+    expect(text).toContain("Task: doing math");
+    expect(text).toContain("[IDLE] coder (agent-2)");
+    expect(text).toContain("Last: done");
   });
 
   it("list_agents returns agent statuses from manager", async () => {

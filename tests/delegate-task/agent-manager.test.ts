@@ -114,44 +114,55 @@ describe("AgentManager", () => {
     expect(status).toContain("Last: docs found");
   });
 
-  it("notifyAgent routes to mainNotify for main", async () => {
-    const fn = vi.fn().mockResolvedValue(undefined);
-    manager.mainNotify = fn;
+  it("deliverMessage uses session.sendUserMessage when session exists", async () => {
+    const mockSession = {
+      sendUserMessage: vi.fn().mockResolvedValue(undefined),
+    } as any;
+    manager.register("agent-1", "researcher", "task", undefined, mockSession);
 
-    await manager.notifyAgent("main", "hello");
+    await manager.deliverMessage("agent-1", "hello from peer");
 
-    expect(fn).toHaveBeenCalledWith("hello");
+    expect(mockSession.sendUserMessage).toHaveBeenCalledWith("hello from peer", {
+      deliverAs: "followUp",
+    });
   });
 
-  it("notifyAgent stores on headless agent record", async () => {
-    manager.register("agent-1", "researcher", "task");
+  it("deliverMessage falls back to adapter when no session", async () => {
+    const adapter = { deliverMessage: vi.fn().mockResolvedValue(undefined) };
+    manager.registerAdapter("main", adapter);
 
-    await manager.notifyAgent("agent-1", "result done");
+    await manager.deliverMessage("main", "hello from peer");
 
-    const agent = manager.agents.get("agent-1")!;
-    expect(agent.notifications).toEqual(["result done"]);
+    expect(adapter.deliverMessage).toHaveBeenCalledWith("hello from peer");
   });
 
-  it("getAgentStatuses shows and drains notifications for the caller", async () => {
+  it("deliverMessage does nothing for unknown agents", async () => {
+    // Should not throw
+    await expect(manager.deliverMessage("nonexistent", "hello")).resolves.toBeUndefined();
+  });
+
+  it("registerAdapter stores adapter without polluting agents map", () => {
+    const adapter = { deliverMessage: vi.fn() };
+    manager.registerAdapter("main", adapter);
+
+    // Main is NOT in the agents map — adapters are separate
+    expect(manager.agents.has("main")).toBe(false);
+
+    // But delivery still works
+    expect(async () => {
+      await manager.deliverMessage("main", "hello");
+    }).not.toThrow();
+  });
+
+  it("getAgentStatuses no longer shows notifications (delivered via session)", async () => {
     manager.register("agent-1", "researcher", "task");
-    manager.agents.get("agent-1")!.notifications.push("✅ researcher done: found docs");
+    manager.markDone("agent-1", "done");
 
     const status = await manager.getAgentStatuses("agent-1");
-    expect(status).toContain("PENDING RESULTS FROM DELEGATED TASKS:");
-    expect(status).toContain("✅ researcher done: found docs");
-
-    // Notifications are drained
-    expect(manager.agents.get("agent-1")!.notifications).toEqual([]);
-  });
-
-  it("getAgentStatuses does not drain notifications for non-caller agents", async () => {
-    manager.register("agent-1", "researcher", "task");
-    manager.register("agent-2", "coder", "task");
-    manager.agents.get("agent-1")!.notifications.push("secret");
-
-    const status = await manager.getAgentStatuses("agent-2");
+    expect(status).toContain("RUNNING AGENTS");
+    expect(status).toContain("[IDLE] researcher");
+    // No PENDING RESULTS section — delivered via session.sendUserMessage
     expect(status).not.toContain("PENDING RESULTS");
-    expect(manager.agents.get("agent-1")!.notifications).toEqual(["secret"]);
   });
 });
 
